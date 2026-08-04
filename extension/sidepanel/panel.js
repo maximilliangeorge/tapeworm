@@ -316,14 +316,29 @@ async function buildConfig() {
   };
 }
 
+function exportBasename(url) {
+  try { return new URL(url).hostname || 'tapeworm'; } catch { return 'tapeworm'; }
+}
+
 $('export').addEventListener('click', async () => {
   const cfg = await buildConfig();
   const blob = new Blob([JSON.stringify(cfg, null, 2) + '\n'], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (new URL(cfg.url).hostname || 'tapeworm') + '.json';
+  a.download = exportBasename(cfg.url) + '.json';
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+$('copy-cmd').addEventListener('click', async () => {
+  const info = await send('info');
+  const base = exportBasename((info && info.url) || state.url);
+  // node bin/…, not npx: the package isn't published, so this is the command
+  // that actually works today (run from a tapeworm checkout).
+  const cmd = `node bin/tapeworm.ts ~/Downloads/${base}.json --out ${base}.mp4`;
+  await navigator.clipboard.writeText(cmd);
+  $('copy-cmd').textContent = 'Copied ✓';
+  setTimeout(() => { $('copy-cmd').textContent = 'Copy command'; }, 1200);
 });
 
 $('copy').addEventListener('click', async () => {
