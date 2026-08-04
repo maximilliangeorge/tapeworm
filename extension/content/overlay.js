@@ -56,6 +56,10 @@ const CSS = `
   .q-id, .q-data { background: #1d4a2a; color: #7fe3a1; }
   .q-class { background: #4a3d1d; color: #e3cb7f; }
   .q-structural { background: #4a1d1d; color: #e37f7f; }
+  .shield {
+    position: fixed; inset: 0; z-index: 6; display: none;
+    pointer-events: auto;
+  }
   .banner {
     position: fixed; z-index: 5; left: 50%; transform: translateX(-50%); top: 16px;
     display: none; background: #16181d; color: #e8eaf0; font-size: 13px;
@@ -77,11 +81,16 @@ function mount(onEmit) {
   els.badge = div('vp-badge');
   els.highlight = div('highlight');
   els.tip = div('tip');
+  // While a preview plays, the page scrolls under the user's REAL cursor and
+  // Chrome natively re-hovers whatever passes beneath it — which isn't in the
+  // timeline and won't be in the render. This transparent shield catches the
+  // pointer during playback so only the timeline's own hovers apply.
+  els.shield = div('shield');
   els.banner = div('banner');
   els.banner.textContent =
     'This page gates scrolling behind an intro. Scroll down manually to unlock it, then add keyframes. ' +
     '(The renderer unlocks it automatically at capture time.)';
-  shadow.append(els.badge, els.highlight, els.tip, els.banner);
+  shadow.append(els.badge, els.highlight, els.tip, els.shield, els.banner);
   document.documentElement.appendChild(host);
 
   addEventListener('resize', onResize, { passive: true });
@@ -415,6 +424,7 @@ function play(steps) {
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
   preview = { geo, startWall: performance.now(), offsetSec: 0, playing: true, raf: 0 };
+  if (els.shield) els.shield.style.display = 'block';
   const tick = () => {
     if (!preview || !preview.playing) return;
     const t = preview.offsetSec + (performance.now() - preview.startWall) / 1000;
@@ -423,6 +433,7 @@ function play(steps) {
     emit('preview:time', { t, total: preview.geo.total });
     if (t >= preview.geo.total) {
       preview.playing = false;
+      if (els.shield) els.shield.style.display = 'none';
       emit('preview:ended', { total: preview.geo.total });
       return;
     }
@@ -444,6 +455,7 @@ function seek(steps, tSec) {
 function stopPreview(keepHover) {
   if (preview && preview.raf) cancelAnimationFrame(preview.raf);
   preview = null;
+  if (els.shield) els.shield.style.display = 'none';
   if (!keepHover) setPreviewHover(null);
 }
 
