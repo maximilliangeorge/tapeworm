@@ -14,6 +14,7 @@ let state = {
   title: '',
   settings: { width: 1280, height: 800, dpr: 2, fps: 60 },
   steps: [{ type: 'start', at: 'top', hold: 0.8 }],
+  codec: 'h264',
 };
 let totalSec = 0;
 let playing = false;
@@ -373,14 +374,24 @@ $('export').addEventListener('click', async () => {
   URL.revokeObjectURL(a.href);
 });
 
+// The --out extension is what selects the codec CLI-side (.png = a frame
+// sequence; the CLI turns "base.png" into a directory called "base").
+const CODEC_EXT = { h264: '.mp4', prores: '.mov', png: '.png' };
+
+$('codec').addEventListener('change', async () => {
+  state.codec = $('codec').value;
+  await saveState();
+});
+
 $('copy-cmd').addEventListener('click', async () => {
   const cfg = await buildConfig();
   const base = exportBasename(cfg.url);
+  const ext = CODEC_EXT[state.codec] || '.mp4';
   // Self-contained: the config rides along on stdin via a heredoc, so nothing
   // needs to exist on disk. The quoted delimiter keeps the shell's hands off
   // the JSON. node bin/…, not npx: the package isn't published yet.
   const cmd =
-    `node bin/tapeworm.ts - --out ${base}.mp4 <<'TAPEWORM'\n` +
+    `node bin/tapeworm.ts - --out ${base}${ext} <<'TAPEWORM'\n` +
     JSON.stringify(cfg, null, 2) +
     `\nTAPEWORM`;
   await navigator.clipboard.writeText(cmd);
@@ -451,6 +462,7 @@ async function syncPage() {
   for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
     $(id).value = String(state.settings[key]);
   }
+  $('codec').value = state.codec || 'h264'; // pre-codec saved states lack the field
   renderSteps();
   const info = await send('info');
   if (info) onPageInfo(info);

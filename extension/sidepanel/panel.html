@@ -59,6 +59,11 @@
 </section>
 
 <section class="export">
+  <select id="codec" title="Output codec for the copied render command — the command's --out extension selects it. h264 plays everywhere; ProRes 4444 is an editor-friendly master; png writes a lossless frame sequence into a directory.">
+    <option value="h264">h264 (.mp4)</option>
+    <option value="prores">ProRes (.mov)</option>
+    <option value="png">PNG frames</option>
+  </select>
   <button id="export" class="primary">Export config</button>
   <button id="copy">Copy JSON</button>
   <button id="copy-cmd" title="Copy a self-contained render command — the config is embedded in it, no exported file needed. Paste into a terminal at the tapeworm repo.">Copy command</button>

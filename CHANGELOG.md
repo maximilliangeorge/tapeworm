@@ -31,6 +31,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `tapeworm -` reads the config from stdin. The extension's "Copy command"
   button uses it to produce a fully self-contained render command (config
   embedded in a heredoc) — no exported file needed.
+- The extension's export bar gained a codec select (h264 / ProRes / PNG frames)
+  that shapes the copied command's `--out` extension (`.mp4` / `.mov` / `.png`),
+  which is what selects the codec CLI-side.
 - `click` and `hover` timeline steps are now executed: real input through
   Chrome's input pipeline (`isTrusted: true`, `:hover` styles apply) at the
   element's position at that point in the timeline, with a `settle` dwell
