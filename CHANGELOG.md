@@ -24,6 +24,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `tapeworm -` reads the config from stdin. The extension's "Copy command"
   button uses it to produce a fully self-contained render command (config
   embedded in a heredoc) — no exported file needed.
+- `click` and `hover` timeline steps are now executed: real input through
+  Chrome's input pipeline (`isTrusted: true`, `:hover` styles apply) at the
+  element's position at that point in the timeline, with a `settle` dwell
+  (default 0.6s) while whatever they trigger animates. Interactive timelines
+  render sequentially (`jobs` forced to 1). The extension gained ＋ Click /
+  ＋ Hover arm modes that record the next picked element as an interaction.
+  `wait` remains format-only.
 
 - Timeline format v2: `timeline` entries may now be typed steps (`start`,
   `move`, `hold`) as well as the existing segment form, mixed freely. Legacy

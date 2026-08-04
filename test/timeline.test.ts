@@ -105,13 +105,30 @@ test('legacy segments and typed steps mix freely and produce identical tracks', 
   assert.deepEqual(a.plan, b.plan);
 });
 
-test('actions are empty and the track is not sequential until interactions land', async () => {
+test('a plain scroll timeline has no actions and stays shardable', async () => {
   const { actions, sequential } = await buildTrack(
     fakeSession({ max: 4000 }),
     cfgWith([{ at: 'top', hold: 0.2 }, { to: 'bottom', duration: 1 }]),
   );
   assert.deepEqual(actions, []);
   assert.equal(sequential, false);
+});
+
+test('click steps pin an action to the exact frame, dwell for settle, and force sequential', async () => {
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: '.cta' }, settle: 2 },
+    { type: 'move', to: 'bottom', duration: 1, ease: 'linear', hold: 0.5 },
+  ]);
+  const { offsets, actions, sequential, plan } = await buildTrack(fakeSession({ max: 4000 }), cfg);
+  assert.equal(sequential, true);
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].frame, 10, 'fires right after the 1s start hold @10fps');
+  assert.equal(actions[0].step.type, 'click');
+  // 10 start + 20 settle + 10 move + 5 hold
+  assert.equal(offsets.length, 45);
+  assert.deepEqual(offsets.slice(10, 30), Array(20).fill(0), 'settle dwells at the current position');
+  assert.match(plan[1], /click \.cta, settle 2\.00s/);
 });
 
 test('auto mode: discovered sections become the timeline, empty discovery falls back to a full sweep', async () => {

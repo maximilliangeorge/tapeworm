@@ -26,6 +26,7 @@ let shadow = null;
 let els = {};
 let settings = { width: 1280, height: 800, dpr: 2, fps: 60 };
 let picking = false;
+let pickMode = 'move'; // 'move' | 'click' | 'hover' — what the next pick records
 let pickTarget = null;
 let preview = null; // { segments, total, startWall, offsetSec, playing, raf }
 let lastGate = null;
@@ -164,7 +165,8 @@ function checkGate() {
 function onScrollOrGate() { checkGate(); }
 
 // ---------------------------------------------------------------- picker
-function startPicker() {
+function startPicker(mode) {
+  pickMode = mode === 'click' || mode === 'hover' ? mode : 'move';
   if (picking) return;
   picking = true;
   addEventListener('mousemove', onPickMove, true);
@@ -243,6 +245,7 @@ function onPickClick(ev) {
   if (best.nth) anchor.nth = best.nth;
   if (best.fallbackText) anchor.fallbackText = best.fallbackText;
   emit('picker:picked', {
+    mode: pickMode,
     anchor,
     quality: best.quality,
     unique: best.unique,
@@ -299,8 +302,15 @@ function buildGeometry(steps) {
       const isLast = i === steps.length - 1;
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
       if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null }); t += hold; }
+    } else if (step.type === 'click' || step.type === 'hover') {
+      // The preview can't dispatch trusted input, so the interaction itself
+      // doesn't happen — but its settle time must still pass, or every
+      // timestamp after it would disagree with the render.
+      const settle = step.settle != null ? step.settle : 0.6;
+      segs.push({ t0: t, t1: t + settle, from: y, to: y, easeFn: null });
+      t += settle;
     }
-    // click/hover/wait: not executable yet — previewed as nothing, same as render
+    // wait: not executable yet — previewed as nothing, same as render
   }
   return { segments: segs, total: t, errors };
 }

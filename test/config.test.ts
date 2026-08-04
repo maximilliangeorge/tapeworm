@@ -95,18 +95,46 @@ test('a typed timeline passes through; a leading non-start step gets an implicit
   assert.deepEqual(r.timeline[2], { type: 'hold', seconds: 1 });
 });
 
-test('interaction steps are format-valid but rejected with a forward-looking message', () => {
-  for (const step of [
-    { type: 'click', target: { selector: '.cta' } },
-    { type: 'hover', target: { selector: '.menu' } },
-    { type: 'wait', seconds: 1 },
-  ] as const) {
+test('click and hover steps are accepted; wait is still format-only', () => {
+  const r = resolveConfig({
+    url: BASE.url,
+    timeline: [
+      { at: 'top' },
+      { type: 'click', target: { selector: '.cta' }, settle: 1 },
+      { type: 'hover', target: { selector: '.menu' } },
+    ],
+  });
+  assert.deepEqual(r.timeline[1], { type: 'click', target: { selector: '.cta' }, settle: 1 });
+  assert.deepEqual(r.timeline[2], { type: 'hover', target: { selector: '.menu' } });
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { type: 'wait', seconds: 1 }] }),
+    /not executable yet.*will work unchanged/s,
+  );
+});
+
+test('interactions need an element target and a sane settle', () => {
+  for (const target of ['top', 1200, undefined] as const) {
     assert.throws(
-      () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, step] }),
-      /not executable yet.*will work unchanged/s,
-      step.type,
+      () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { type: 'click', target } as never] }),
+      /needs a "target" element anchor/,
+      String(target),
     );
   }
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { type: 'click', target: { selector: '.x' }, settle: -1 }] }),
+    /"settle" must be seconds/,
+  );
+});
+
+// Frame N shows whatever earlier clicks did to the page — interactive
+// timelines are path-dependent, so they cannot shard, same as prewarm cache/none.
+test('an interactive timeline forces jobs=1', () => {
+  const r = resolveConfig({
+    url: BASE.url,
+    jobs: 4,
+    timeline: [{ at: 'top' }, { type: 'click', target: { selector: '.cta' } }, { to: 'bottom' }],
+  });
+  assert.equal(r.jobs, 1);
 });
 
 test('malformed steps fail with the index and the problem', () => {

@@ -16,7 +16,7 @@ import { concatSegments, createEncoder, createPngWriter, type Encoder } from './
 import { openPage, prewarm } from './page.ts';
 import { strobeThreshold } from './easing.ts';
 import { buildTrack, peakStep, type Track } from './timeline.ts';
-import type { Resolved } from './types.ts';
+import type { Resolved, Step } from './types.ts';
 
 export type Progress = {
   onPlan?(plan: string[], track: Track, notes: string[]): void;
@@ -56,6 +56,32 @@ async function captureFrame(session: Session, y: number, tSec: number, cfg: Reso
     30_000,
   );
   return Buffer.from(shot.data, 'base64');
+}
+
+/**
+ * Perform a click/hover through Chrome's real input pipeline
+ * (Input.dispatchMouseEvent), the same road unlockScroll takes. Synthetic DOM
+ * clicks won't do: they carry isTrusted=false, produce no hover/active states,
+ * and many libraries ignore them.
+ */
+async function performAction(session: Session, step: Step & { type: 'click' | 'hover' }, y: number): Promise<void> {
+  await session.eval(`window.__sr.setScroll(${y})`);
+  const target = step.target as { selector: string; nth?: number };
+  const pt = await session.eval<{ found: boolean; x: number; y: number; visible: boolean }>(
+    `window.__sr.actionPoint(${JSON.stringify(target)})`,
+  );
+  if (!pt?.found) {
+    throw new Error(`cannot ${step.type} "${target.selector}": selector matched nothing at that point in the timeline`);
+  }
+  const at = { x: Math.round(pt.x), y: Math.round(pt.y) };
+  await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
+  if (step.type === 'click') {
+    await session.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...at, button: 'left', clickCount: 1 });
+    await session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at, button: 'left', clickCount: 1 });
+  }
+  // give the page's handlers a beat of real time; the animations they start are
+  // then driven per-frame by the virtual clock like everything else
+  await new Promise((r) => setTimeout(r, 80));
 }
 
 export class ScrollDrift extends Error {
@@ -110,6 +136,10 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
     } catch { /* the probe is advisory; never fail the render on it */ }
   }
 
+  if (track.sequential) {
+    notes.push(`timeline has ${track.actions.length} interaction${track.actions.length === 1 ? '' : 's'} — rendering sequentially`);
+  }
+
   const strobeAt = strobeThreshold(cfg.height, cfg.fps, cfg.dpr);
   if (peak > strobeAt * 1.15) {
     notes.push(
@@ -158,6 +188,10 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         for (let n = from; n < to; n++) {
           const y = track.offsets[n];
           const t = n / cfg.fps;
+          for (const action of track.actions) {
+            if (action.frame !== n) continue;
+            await performAction(worker.session, action.step as Step & { type: 'click' | 'hover' }, y);
+          }
           let png: Buffer;
           try {
             png = await captureFrame(worker.session, y, t, cfg);

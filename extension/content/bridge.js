@@ -25,7 +25,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.type) {
     case 'settings': result = O.setSettings(d); break;
     case 'info': result = O.pageInfo(); break;
-    case 'picker:start': O.startPicker(); break;
+    case 'picker:start': O.startPicker(d.mode); break;
     case 'picker:stop': O.stopPicker(); break;
     case 'preview:play': result = O.play(d.steps); break;
     case 'preview:seek': result = O.seek(d.steps, d.t); break;

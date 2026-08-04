@@ -25,6 +25,10 @@ config the renderer runs unchanged.
    pre-warm, so lazy images load and scroll reveals fire before you pick.
 4. **＋ Pick element**, then click things on the page. Each keyframe shows its
    generated selector and a quality grade — `structural` is flagged as fragile.
+   **＋ Click** / **＋ Hover** arm interaction mode instead: the next element you
+   click is recorded as a click or hover step, performed with real trusted
+   input during the render (the in-browser preview skips it — content scripts
+   can't fake trusted input — but its settle time still counts).
 5. Adjust align / offset / duration / ease / hold per keyframe; add holds;
    reorder; click a keyframe's selector to jump the page to it.
 6. **▶ Preview** plays the timeline in real time with the same easing math the

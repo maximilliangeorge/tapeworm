@@ -13,6 +13,9 @@ import type { Session } from './cdp.ts';
 import type { Anchor, Resolved, Step } from './types.ts';
 import { autoDuration, DEFAULT_EASE, resolveEase } from './easing.ts';
 
+/** Seconds the timeline dwells after an interaction, letting what it triggered animate. */
+export const DEFAULT_SETTLE = 0.6;
+
 export type Track = {
   /** Scroll offset for each frame, already snapped to the device-pixel grid. */
   offsets: number[];
@@ -99,8 +102,21 @@ export async function buildTrack(session: Session, cfg: Resolved): Promise<Track
       continue;
     }
 
+    if (step.type === 'click' || step.type === 'hover') {
+      // The interaction fires just before this frame is captured (render.ts owns
+      // the actual CDP input); the settle frames dwell here while whatever it
+      // triggered animates — the birth-time machinery in runtime.ts picks any
+      // new animation up at the right frame automatically.
+      actions.push({ frame: offsets.length, step });
+      const settle = step.settle ?? DEFAULT_SETTLE;
+      const settleFrames = Math.max(1, Math.round(settle * cfg.fps));
+      for (let f = 0; f < settleFrames; f++) offsets.push(snap(y));
+      plan.push(`${startT.toFixed(2)}s  ${step.type} ${describe(step.target)}, settle ${settle.toFixed(2)}s`);
+      continue;
+    }
+
     if (step.type !== 'move') {
-      // click/hover/wait are rejected at config time; anything else reaching here is a bug
+      // 'wait' is rejected at config time; anything else reaching here is a bug
       throw new Error(`timeline[${i}]: "${step.type}" steps are not executable yet`);
     }
 

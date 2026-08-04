@@ -144,6 +144,23 @@ test('frame() applies the scroll clamped to the document', async () => {
   assert.equal(over.actual, 4200, 'clamped to maxScroll');
 });
 
+test('actionPoint aims at the element centre in viewport coords, clamped', () => {
+  const cta = { getBoundingClientRect: () => ({ left: 100, top: 300, width: 200, height: 50, bottom: 350 }) };
+  const off = { getBoundingClientRect: () => ({ left: -500, top: 2000, width: 100, height: 40, bottom: 2040 }) };
+  const { sr } = boot(cfg(), {
+    querySelectorAll: (sel: string) => (sel === '.cta' ? [cta] : sel === '.off' ? [off] : []),
+  });
+  const hit = sr.actionPoint({ selector: '.cta' });
+  assert.equal(hit.found, true);
+  assert.equal(hit.x, 200);
+  assert.equal(hit.y, 325);
+  assert.equal(hit.visible, true);
+  const clamped = sr.actionPoint({ selector: '.off' });
+  assert.equal(clamped.visible, false);
+  assert.ok(clamped.x >= 0 && clamped.y <= 799, 'clamped into the viewport');
+  assert.equal(sr.actionPoint({ selector: '.missing' }).found, false);
+});
+
 test('resolveAnchor: keywords, raw offsets, and element alignment', () => {
   const hero = { getBoundingClientRect: () => ({ top: 1000, height: 400 }) };
   const { sr } = boot(cfg(), {

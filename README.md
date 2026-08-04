@@ -103,7 +103,9 @@ Timeline entries can also be written as typed steps, and the two forms mix freel
 }
 ```
 
-`start` sets the opening position (first entry only), `move` is a scroll with the same `duration`/`ease`/`hold` fields as the segment form, and `hold` dwells at the current position. The format also defines `click`, `hover`, and `wait` steps for mid-timeline interactions; they are accepted by the parser but rejected with a clear message until interaction support lands — configs written with them today will work unchanged once it does.
+`start` sets the opening position (first entry only), `move` is a scroll with the same `duration`/`ease`/`hold` fields as the segment form, and `hold` dwells at the current position.
+
+**Interactions**: `{ "type": "click", "target": { "selector": "#menu-btn" }, "settle": 0.8 }` (and `hover` likewise) performs the interaction mid-timeline with **real input** through Chrome's input pipeline — `isTrusted` is true, `:hover` styles apply, and libraries that ignore synthetic events respond. `target` must be an element anchor; `settle` (default 0.6s) is how long the timeline dwells afterwards while whatever it triggered animates — a menu opening over 300ms starts at the right frame and eases correctly, courtesy of the same animation birth-time machinery everything else uses. Because frame N now shows whatever earlier clicks did to the page, an interactive timeline renders sequentially (`jobs` is forced to 1, like prewarm `cache`/`none`). `wait` remains format-only for now: it parses but is rejected with a clear message until it lands.
 
 ---
 

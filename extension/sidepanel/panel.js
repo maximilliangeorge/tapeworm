@@ -17,7 +17,7 @@ let state = {
 };
 let totalSec = 0;
 let playing = false;
-let picking = false;
+let picking = null; // null | 'move' | 'click' | 'hover'
 
 // ---------------------------------------------------------------- messaging
 async function send(type, data) {
@@ -33,7 +33,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.from !== 'tapeworm-overlay') return;
   const d = msg.data || {};
   if (msg.type === 'picker:picked') onPicked(d);
-  if (msg.type === 'picker:stopped') setPicking(false);
+  if (msg.type === 'picker:stopped') setPicking(null);
   if (msg.type === 'preview:time') onPreviewTime(d);
   if (msg.type === 'preview:ended') { playing = false; $('play').textContent = '▶ Preview'; }
   if (msg.type === 'page:info') onPageInfo(d);
@@ -57,8 +57,13 @@ function stripInternal(step) {
 
 // ---------------------------------------------------------------- events from the page
 function onPicked(d) {
-  const step = { type: 'move', to: d.anchor, ease: 'inOutCubic', _quality: d.quality };
-  state.steps.push(step);
+  if (d.mode === 'click' || d.mode === 'hover') {
+    state.steps.push({ type: d.mode, target: d.anchor, _quality: d.quality });
+    setPicking(null); // interactions arm for ONE pick — back to normal after
+    send('picker:stop');
+  } else {
+    state.steps.push({ type: 'move', to: d.anchor, ease: 'inOutCubic', _quality: d.quality });
+  }
   saveState();
   renderSteps();
   refreshDuration();
@@ -166,6 +171,16 @@ function renderSteps() {
         field('ease', selectInput(EASES, step.ease || 'inOutCubic', (v) => { step.ease = v; commit(); })),
         field('hold s', numInput(step.hold, '', (v) => { step.hold = v == null ? undefined : v; commit(); })),
       ));
+    } else if (step.type === 'click' || step.type === 'hover') {
+      const sel = span('sel', (step.type === 'click' ? '⊕ click ' : '⊙ hover ') + anchorLabel(step.target));
+      sel.title = 'Jump the page to this element';
+      sel.addEventListener('click', () => send('jump', { anchor: step.target }));
+      const badges = step._quality ? [badge(step._quality)] : [];
+      li.append(row(sel, ...badges, icons(i)));
+      li.append(row(
+        field('settle s', numInput(step.settle, '0.6', (v) => { step.settle = v == null ? undefined : v; commit(); })),
+        span('sel', 'real input during render; preview skips it'),
+      ));
     } else {
       li.append(row(span('sel', step.type + ' (not executable yet)'), badge('warn'), icons(i)));
     }
@@ -230,16 +245,27 @@ async function refreshDuration() {
 }
 
 // ---------------------------------------------------------------- toolbar
-function setPicking(on) {
-  picking = on;
-  $('pick').classList.toggle('active', on);
-  $('pick').textContent = on ? '✕ Stop picking (Esc)' : '＋ Pick element';
+function setPicking(mode) {
+  picking = mode;
+  $('pick').classList.toggle('active', mode === 'move');
+  $('pick').textContent = mode === 'move' ? '✕ Stop picking (Esc)' : '＋ Pick element';
+  $('arm-click').classList.toggle('active', mode === 'click');
+  $('arm-hover').classList.toggle('active', mode === 'hover');
 }
 
-$('pick').addEventListener('click', async () => {
-  setPicking(!picking);
-  await send(picking ? 'picker:start' : 'picker:stop');
-});
+async function armPicker(mode) {
+  if (picking === mode) {
+    setPicking(null);
+    await send('picker:stop');
+    return;
+  }
+  setPicking(mode);
+  await send('picker:start', { mode });
+}
+
+$('pick').addEventListener('click', () => armPicker('move'));
+$('arm-click').addEventListener('click', () => armPicker('click'));
+$('arm-hover').addEventListener('click', () => armPicker('hover'));
 
 $('fit').addEventListener('click', fitWindow);
 

@@ -121,6 +121,15 @@ test('overlay preview geometry matches the renderer: same hold defaults and auto
   const { total, errors } = O.duration(steps);
   assert.equal(errors.length, 0);
   assert.ok(Math.abs(total - (1 + 2 + 0.6 + 0.5 + auto + 0.8)) < 1e-9, `total ${total}`);
+
+  // interactions can't run in the preview, but their settle time must still
+  // pass or every later timestamp would disagree with the render
+  const withClick = O.duration([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: '.cta' }, settle: 2 },
+    { type: 'hover', target: { selector: '.menu' } },
+  ]);
+  assert.ok(Math.abs(withClick.total - (1 + 2 + 0.6)) < 1e-9, `total ${withClick.total}`);
 });
 
 test('overlay seek lands the same offsets the renderer would', () => {

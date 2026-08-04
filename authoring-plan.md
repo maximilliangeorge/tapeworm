@@ -183,6 +183,15 @@ Load unpacked; author a three-keyframe timeline against the local test site and 
 
 ## Phase 3 — Interactions
 
+**Status: done for click/hover (2026-08-04).** Executed via CDP
+`Input.dispatchMouseEvent` in `render.ts` (`performAction`), aimed by
+`__sr.actionPoint` at dispatch time; `Track.actions` populated, `sequential`
+set, `jobs` forced to 1 in `resolveConfig`; extension arm-modes shipped.
+Verified on the local test page: a click handler gated on `event.isTrusted`
+fired (synthetic clicks can't), and `:hover` styling appeared in the frames —
+compared against a no-interaction control render at identical frame indices.
+Still open: `wait` steps (format-only), and the optional drawn cursor.
+
 Format landed in Phase 0, so this is execution only:
 
 - Execute `click` / `hover` via CDP `Input.dispatchMouseEvent` at the element's current viewport position. Real input, not `el.click()` — synthetic DOM clicks don't produce hover/active states and many libraries ignore them. `unlockScroll` in `src/page.ts` is the existing template.

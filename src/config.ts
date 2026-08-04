@@ -37,7 +37,7 @@ export function loadConfig(path: string): Config {
 const STEP_TYPES = ['start', 'move', 'hold', 'click', 'hover', 'wait'] as const;
 
 /** Defined in the format now so authored configs survive, executable later. */
-const PHASE3_TYPES = ['click', 'hover', 'wait'] as const;
+const NOT_YET_EXECUTABLE = ['wait'] as const;
 
 /**
  * Normalise a timeline to `Step[]`. Entries may be legacy `Segment`s (no `type`)
@@ -55,14 +55,26 @@ export function normaliseTimeline(entries: TimelineEntry[]): Step[] {
       if (!STEP_TYPES.includes(e.type as never)) {
         throw new Error(`timeline[${i}]: unknown step type "${e.type}". Known: ${STEP_TYPES.join(', ')}`);
       }
-      if (PHASE3_TYPES.includes(e.type as never)) {
+      if (NOT_YET_EXECUTABLE.includes(e.type as never)) {
         throw new Error(
           `timeline[${i}]: "${e.type}" steps are part of the format but not executable yet — ` +
-            `interaction support is coming. This config will work unchanged once it lands.`,
+            `support is coming. This config will work unchanged once it lands.`,
         );
       }
       if (e.type === 'start' && i !== 0) {
         throw new Error(`timeline[${i}]: "start" is only valid as the first entry`);
+      }
+      if (e.type === 'click' || e.type === 'hover') {
+        const t = e.target;
+        if (!t || typeof t !== 'object' || typeof (t as { selector?: unknown }).selector !== 'string') {
+          throw new Error(
+            `timeline[${i}]: a "${e.type}" step needs a "target" element anchor ({ selector: … }) — ` +
+              `keywords and raw offsets name positions, not things you can ${e.type}`,
+          );
+        }
+        if (e.settle != null && !(typeof e.settle === 'number' && Number.isFinite(e.settle) && e.settle >= 0)) {
+          throw new Error(`timeline[${i}]: "settle" must be seconds >= 0`);
+        }
       }
       if (e.type === 'move' && e.to === undefined) {
         throw new Error(`timeline[${i}]: a "move" step needs a "to"`);
@@ -173,7 +185,11 @@ export function resolveConfig(input: Config): Resolved {
     // 'cache' and 'none' film reveals as they happen, and reveal state depends on the
     // path taken to get there — a shard that jumps straight to frame 400 would show
     // different reveals than one that scrolled through. So those modes are single-job.
-    jobs: prewarmMode === 'full' ? (input.jobs ?? Math.max(1, Math.min(4, cpus().length - 1))) : 1,
+    // Interactions are path-dependent for the same reason: frame N shows whatever the
+    // clicks before it did to the page, so an interactive timeline can't shard either.
+    jobs: prewarmMode === 'full' && !timeline.some((s) => s.type === 'click' || s.type === 'hover')
+      ? (input.jobs ?? Math.max(1, Math.min(4, cpus().length - 1)))
+      : 1,
     chromePath: input.chromePath ?? null,
     headful: input.headful ?? false,
   };

@@ -464,6 +464,23 @@ window.__sr = {
   },
   resolveAnchor,
   discoverSections,
+  /**
+   * Where to aim real input for an interaction target, in viewport CSS px.
+   * Resolved at dispatch time, after the frame's scroll is applied — the same
+   * element can sit anywhere depending on what earlier interactions did.
+   */
+  actionPoint(a) {
+    const list = document.querySelectorAll(a.selector);
+    const el = list[a.nth || 0];
+    if (!el) return { found: false };
+    const r = el.getBoundingClientRect();
+    return {
+      found: true,
+      x: Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1),
+      y: Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1),
+      visible: r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight,
+    };
+  },
   dismissConsent,
   hideOverlays,
   neutraliseHijackers,
