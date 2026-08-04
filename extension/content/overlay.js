@@ -170,15 +170,25 @@ function startPicker() {
   addEventListener('mousemove', onPickMove, true);
   addEventListener('click', onPickClick, true);
   addEventListener('keydown', onPickKey, true);
+  // the cursor leaving the viewport (or the window losing focus) means there
+  // is no hovered element — don't leave the last tooltip stranded
+  document.documentElement.addEventListener('mouseleave', hidePickerHover, true);
+  addEventListener('blur', hidePickerHover);
 }
 
 function stopPicker() {
   if (!picking) return;
   picking = false;
-  pickTarget = null;
   removeEventListener('mousemove', onPickMove, true);
   removeEventListener('click', onPickClick, true);
   removeEventListener('keydown', onPickKey, true);
+  document.documentElement.removeEventListener('mouseleave', hidePickerHover, true);
+  removeEventListener('blur', hidePickerHover);
+  hidePickerHover();
+}
+
+function hidePickerHover() {
+  pickTarget = null;
   if (els.highlight) els.highlight.style.display = 'none';
   if (els.tip) els.tip.style.display = 'none';
 }
