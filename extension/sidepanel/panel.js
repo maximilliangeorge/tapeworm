@@ -70,7 +70,50 @@ function onPageInfo(d) {
   state.title = d.title || state.title;
   $('page-title').textContent = state.title || state.url;
   $('gate-note').hidden = !d.scrollGated;
+  if (d.window) {
+    const s = $('vp-status');
+    if (d.viewportMatched) {
+      s.className = 'ok';
+      s.textContent = d.window.width + '×' + d.window.height + ' ✓';
+    } else {
+      s.className = 'bad';
+      s.textContent = d.window.width + '×' + d.window.height + ' ✗';
+    }
+  }
   saveState();
+}
+
+/**
+ * The render always captures the full viewport at the configured size, and CSS
+ * breakpoints mean a page laid out in a bigger window is a DIFFERENT page. So:
+ * resize the browser window until the page viewport equals the render target.
+ * Two passes, because window chrome (tab strip, bookmarks bar) is only
+ * measurable as the outer/inner difference after the first resize.
+ */
+async function fitWindow() {
+  for (let pass = 0; pass < 2; pass++) {
+    const info = await send('info');
+    if (!info || !info.window) return;
+    const dw = state.settings.width - info.window.width;
+    const dh = state.settings.height - info.window.height;
+    if (dw === 0 && dh === 0) { onPageInfo(info); return; }
+    const tab = await chrome.tabs.get(tabId);
+    const win = await chrome.windows.get(tab.windowId);
+    await chrome.windows.update(win.id, {
+      state: 'normal',
+      width: (win.width || 0) + dw,
+      height: (win.height || 0) + dh,
+    });
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  const info = await send('info');
+  if (info) {
+    onPageInfo(info);
+    if (!info.viewportMatched) {
+      $('vp-status').textContent += ' — screen too small for ' +
+        state.settings.width + '×' + state.settings.height;
+    }
+  }
 }
 
 function onPreviewTime(d) {
@@ -199,6 +242,22 @@ $('pick').addEventListener('click', async () => {
   await send(picking ? 'picker:start' : 'picker:stop');
 });
 
+$('fit').addEventListener('click', fitWindow);
+
+$('preset').addEventListener('change', async () => {
+  const v = $('preset').value;
+  if (!v) return;
+  const [w, h] = v.split('x').map(Number);
+  state.settings.width = w;
+  state.settings.height = h;
+  $('s-width').value = String(w);
+  $('s-height').value = String(h);
+  await saveState();
+  await send('settings', state.settings);
+  await fitWindow();
+  $('preset').value = '';
+});
+
 $('prepare').addEventListener('click', async () => {
   $('prepare').disabled = true;
   $('prepare').textContent = '⟳ Preparing…';
@@ -235,6 +294,8 @@ for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr',
     state.settings[key] = Number($(id).value);
     await saveState();
     await send('settings', state.settings);
+    const info = await send('info');
+    if (info) onPageInfo(info);
   });
 }
 

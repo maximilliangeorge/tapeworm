@@ -155,7 +155,7 @@ MV3, structured to keep the Web Store route open: `activeTab`, `scripting`, `sto
 
 - **Side panel** (`chrome.sidePanel`, Chrome 114+) — the editor: viewport/fps settings, keyframe list with per-step duration / easing / hold, reorder, export. A side panel doesn't fight page CSS and survives scrolling.
 - **Content script** — the overlay, mounted in a **Shadow DOM** host (`position: fixed`, max z-index, `isolation: isolate`) so page CSS can't reach it:
-  - **Camera frame**: a letterboxed rectangle matching the configured render viewport. If the window is smaller than the target, scale it down and label it ("framing shown at 78%") rather than silently misrepresenting.
+  - ~~**Camera frame**: a letterboxed rectangle matching the configured render viewport.~~ **Superseded (2026-08-04):** the render always captures the full viewport at the configured size, and breakpoints mean a page laid out in a bigger window is a *different* page — a scaled frame inside the wrong-sized window shows the wrong layout, not just the wrong crop. Instead: **Fit window** (with viewport presets) resizes the browser window until the page viewport equals the render viewport, and an on-page badge reports match/mismatch honestly. `tapeworm author` gets this for free via viewport emulation.
   - **Picker**: hover highlight + live selector preview from `TapewormSelector.bestSelector`, click to add a keyframe.
   - **Preview**: rAF loop driving `TapewormAnchors.setScroll` through `TapewormEasing` at real time, plus a scrub slider and click-to-jump per keyframe.
 - **Export**: a full `Config` plus a `meta` block (`authoredWith`, `authoredAt`, `authoredViewport`, `url`) — useful for diagnosing drift, and the natural payload for a hosted service later.
@@ -208,7 +208,7 @@ Format landed in Phase 0, so this is execution only:
 
 ## Risks
 
-- **Drift** is mitigated by the shared core and the camera frame, not eliminated. `tapeworm author` is the tiebreaker; `--draft` is the cheap confirmation.
+- **Drift** is mitigated by the shared core, viewport fitting, and the prepare/prewarm parity, not eliminated. `tapeworm author` is the tiebreaker; `--draft` is the cheap confirmation.
 - **Scroll-gated and scroll-hijacking sites** can't be authored without manual unlocking (untrusted events). Surfaced in the UI.
 - **MV3 service worker eviction** — no state in the worker.
 - **Web Store review** if that route is taken: permissions kept minimal specifically to survive it.

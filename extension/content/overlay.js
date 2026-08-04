@@ -33,17 +33,12 @@ let lastGate = null;
 const CSS = `
   :host { all: initial; }
   * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  .camera {
-    position: fixed; pointer-events: none; z-index: 1;
-    border: 2px solid rgba(255, 82, 82, 0.9); border-radius: 2px;
-    box-shadow: 0 0 0 100000px rgba(0, 0, 0, 0.28);
+  .vp-badge {
+    position: fixed; right: 10px; top: 10px; z-index: 2; pointer-events: none;
+    font-size: 11px; line-height: 1; padding: 5px 8px; border-radius: 4px;
+    background: rgba(29, 122, 62, 0.92); color: #fff;
   }
-  .camera-label {
-    position: absolute; right: -2px; bottom: -26px;
-    background: rgba(255, 82, 82, 0.95); color: #fff;
-    font-size: 12px; line-height: 1; padding: 5px 8px; border-radius: 3px;
-    white-space: nowrap;
-  }
+  .vp-badge.warn { background: rgba(196, 60, 60, 0.94); max-width: 340px; line-height: 1.4; }
   .highlight {
     position: fixed; pointer-events: none; z-index: 3; display: none;
     background: rgba(64, 156, 255, 0.18); border: 1.5px solid rgba(64, 156, 255, 0.95);
@@ -78,21 +73,19 @@ function mount(onEmit) {
   style.textContent = CSS;
   shadow.appendChild(style);
 
-  els.camera = div('camera');
-  els.cameraLabel = div('camera-label');
-  els.camera.appendChild(els.cameraLabel);
+  els.badge = div('vp-badge');
   els.highlight = div('highlight');
   els.tip = div('tip');
   els.banner = div('banner');
   els.banner.textContent =
     'This page gates scrolling behind an intro. Scroll down manually to unlock it, then add keyframes. ' +
     '(The renderer unlocks it automatically at capture time.)';
-  shadow.append(els.camera, els.highlight, els.tip, els.banner);
+  shadow.append(els.badge, els.highlight, els.tip, els.banner);
   document.documentElement.appendChild(host);
 
-  addEventListener('resize', layoutCamera, { passive: true });
+  addEventListener('resize', onResize, { passive: true });
   addEventListener('scroll', onScrollOrGate, { passive: true });
-  layoutCamera();
+  layoutViewport();
   checkGate();
 
   function div(cls) { const d = document.createElement('div'); d.className = cls; return d; }
@@ -101,37 +94,47 @@ function mount(onEmit) {
 function destroy() {
   stopPicker();
   stopPreview();
-  removeEventListener('resize', layoutCamera);
+  removeEventListener('resize', onResize);
   removeEventListener('scroll', onScrollOrGate);
   if (host) host.remove();
   host = null; shadow = null; els = {};
 }
 
-// ---------------------------------------------------------------- camera frame
+// ---------------------------------------------------------------- viewport match
 /**
- * A letterboxed rectangle matching the configured render viewport, top-aligned
- * (the render viewport's top edge is the current scroll position) and centred
- * horizontally. If the window is smaller than the target, the frame is scaled
- * down and SAYS SO — a silently wrong frame is the tool lying.
+ * The render always captures the FULL viewport at the configured size, and the
+ * page reflows at that size's breakpoint — so authoring must happen in a
+ * viewport that IS that size, not a crop of a bigger one. `tapeworm author`
+ * emulates it exactly; the extension fits the browser window to it. This badge
+ * only reports the truth: green when the viewport matches the render target,
+ * red (with why it matters) when it doesn't.
  */
-function layoutCamera() {
-  if (!els.camera) return;
-  const scale = Math.min(1, innerWidth / settings.width, innerHeight / settings.height);
-  const w = Math.round(settings.width * scale);
-  const h = Math.round(settings.height * scale);
-  const c = els.camera.style;
-  c.left = Math.round((innerWidth - w) / 2) + 'px';
-  c.top = '0px';
-  c.width = w + 'px';
-  c.height = h + 'px';
-  els.cameraLabel.textContent =
-    settings.width + '×' + settings.height +
-    (scale < 0.999 ? ' · framing shown at ' + Math.round(scale * 100) + '%' : '');
+function viewportMatched() {
+  return Math.abs(innerWidth - settings.width) <= 1 && Math.abs(innerHeight - settings.height) <= 1;
+}
+
+function layoutViewport() {
+  if (!els.badge) return;
+  if (viewportMatched()) {
+    els.badge.className = 'vp-badge';
+    els.badge.textContent = 'recording viewport ' + settings.width + '×' + settings.height + ' ✓';
+  } else {
+    els.badge.className = 'vp-badge warn';
+    els.badge.textContent =
+      'window is ' + innerWidth + '×' + innerHeight + ', render viewport is ' +
+      settings.width + '×' + settings.height + ' — the layout may sit at a different ' +
+      'breakpoint. Use "Fit window" in the panel.';
+  }
+}
+
+function onResize() {
+  layoutViewport();
+  emit('page:info', pageInfo());
 }
 
 function setSettings(next) {
   settings = Object.assign({}, settings, next || {});
-  layoutCamera();
+  layoutViewport();
   return settings;
 }
 
@@ -144,6 +147,8 @@ function pageInfo() {
     scrollY: window.scrollY,
     scrollGated: A.maxScroll() < 8,
     window: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+    target: { width: settings.width, height: settings.height },
+    viewportMatched: viewportMatched(),
   };
 }
 

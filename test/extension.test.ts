@@ -138,6 +138,17 @@ test('overlay seek lands the same offsets the renderer would', () => {
   assert.equal(w.scrollY, 4000, 'clamped to the end');
 });
 
+test('overlay reports whether the window IS the render viewport — never a scaled stand-in', () => {
+  const w = bootOverlay(); // window is 1000×700
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1280, height: 800 });
+  assert.equal(O.pageInfo().viewportMatched, false);
+  O.setSettings({ width: 1000, height: 700 });
+  assert.equal(O.pageInfo().viewportMatched, true);
+  assert.deepEqual({ ...O.pageInfo().target }, { width: 1000, height: 700 });
+});
+
 test('overlay reports a scroll-gated page instead of hiding it', () => {
   const w = bootOverlay({ maxScroll: 0 });
   const O = w.TapewormOverlay;

@@ -270,7 +270,7 @@ Because author mode *is* the render environment, it's also the tiebreaker: if th
 
 **The Chrome extension** (in `extension/`, load unpacked via `chrome://extensions`) authors in your everyday browser: click the toolbar action, pick elements on the page, edit timing/easing/holds in the side panel, preview the motion in real time, export the config. Two honesty features matter:
 
-- The **camera frame** overlay shows the configured render viewport; if your window is smaller, it scales down and says so ("framing shown at 78%") rather than silently misrepresenting the framing.
+- The render always captures the **full viewport at the configured size**, and CSS breakpoints mean a page laid out in a different-sized window is a different page. So the extension doesn't draw a pretend frame inside your window — **Fit window** (with viewport presets) resizes the browser window until the page viewport *is* the render viewport, and a badge on the page says ✓ when it matches or warns when it doesn't. Author at the size you'll render at.
 - **Prepare page** steps through the whole page the way the renderer's pre-warm does, so lazy content loads and scroll reveals fire *before* you pick. Skipping it means anchors resolve against un-fired reveal transforms — positions the render will never see. Do it first.
 
 The extension can't send trusted input, so a scroll-gated intro (see above) has to be scrolled through by hand once — the overlay tells you when that's the case. The renderer still unlocks it automatically at capture time.

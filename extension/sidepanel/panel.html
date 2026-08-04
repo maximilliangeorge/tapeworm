@@ -27,6 +27,19 @@
   </label>
   <label>FPS <input id="s-fps" type="number" value="60" min="1" max="240"></label>
 </section>
+<section class="viewport-row">
+  <select id="preset">
+    <option value="">Viewport preset…</option>
+    <option value="1280x800">Laptop 1280×800</option>
+    <option value="1440x900">Laptop 1440×900</option>
+    <option value="1920x1080">Desktop 1920×1080</option>
+    <option value="1024x768">Small laptop 1024×768</option>
+    <option value="768x1024">Tablet 768×1024</option>
+    <option value="390x844">Phone 390×844</option>
+  </select>
+  <button id="fit" class="primary" title="Resize this browser window so the page viewport exactly matches the render viewport — the recording is always the full viewport, so authoring must happen at the real size and breakpoint.">Fit window</button>
+  <span id="vp-status" class="muted"></span>
+</section>
 
 <section class="toolbar">
   <button id="pick" class="primary">＋ Pick element</button>

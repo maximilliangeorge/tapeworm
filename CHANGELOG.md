@@ -13,9 +13,11 @@ and the project uses [Semantic Versioning](https://semver.org/).
   render environment (same flags, emulated viewport, injected runtime, pre-warm).
   Click elements to build a timeline; export with `--out config.json`.
 - A Chrome extension (`extension/`, load unpacked) for authoring in an ordinary
-  browser: element picker with selector quality grades, camera-frame overlay
-  showing the true render framing, real-time preview and scrubbing, a
-  "prepare page" sweep that mirrors the renderer's pre-warm, and JSON export.
+  browser: element picker with selector quality grades, real-time preview and
+  scrubbing, a "prepare page" sweep that mirrors the renderer's pre-warm, and
+  JSON export. Recording is always the full viewport at the configured size, so
+  "Fit window" (with breakpoint presets) resizes the browser window until the
+  page viewport IS the render viewport, and an on-page badge reports the match.
   MV3 with `activeTab`/`scripting`/`storage`/`sidePanel` only.
 - Exported configs carry a `meta` provenance block (`authoredWith`,
   `authoredAt`, `authoredViewport`, `url`); the renderer ignores it.
