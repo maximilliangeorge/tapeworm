@@ -106,6 +106,15 @@ test('Tailwind arbitrary values and CSS-module hashes are filtered; stable class
   assert.equal(w.TapewormSelector.bestSelector(b).selector, 'div.nav-primary');
 });
 
+test("tapeworm's own marker classes are never used in selectors", () => {
+  // picking an element while the preview's hover emulation is active must not
+  // capture the __tw-hover marker — it only exists during emulation
+  const item = el({ tagName: 'SPAN', className: '__tw-hover menu-item' });
+  const w = bootShared({ queries: { 'span.menu-item': [item], 'span.__tw-hover': [item] } });
+  const r = w.TapewormSelector.bestSelector(item);
+  assert.equal(r.selector, 'span.menu-item');
+});
+
 test('data attributes beat classes', () => {
   const target = el({
     className: 'hero',

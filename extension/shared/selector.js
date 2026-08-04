@@ -50,6 +50,7 @@ function awkwardClass(cls) {
   if (!/^[A-Za-z_][\w-]*$/.test(cls)) return true;   // Tailwind arbitrary values, variants with ":" or "[", digits-first
   if (cls.length > 32) return true;
   if (/^(is-|has-|js-)/.test(cls)) return true;      // state classes toggle at runtime
+  if (/^__tw-/.test(cls)) return true;               // tapeworm's own markers (hover emulation etc.) — never real page state
   return false;
 }
 
