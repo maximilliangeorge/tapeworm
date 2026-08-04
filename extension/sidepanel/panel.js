@@ -45,9 +45,8 @@ async function saveState() {
 }
 
 async function loadState() {
-  const got = await chrome.storage.session.get(['doc:' + tabId, 'injectError']);
+  const got = await chrome.storage.session.get('doc:' + tabId);
   if (got['doc:' + tabId]) state = got['doc:' + tabId];
-  $('inject-note').hidden = !got.injectError;
 }
 
 function stripInternal(step) {
@@ -348,22 +347,45 @@ const CONTENT_SCRIPTS = [
   'content/bridge.js',
 ];
 
-(async function boot() {
-  // The panel was opened by the action click, so activeTab covers this tab —
-  // inject the overlay from here (the service worker can't: sidePanel.open
-  // must be the first thing a gesture does, so the worker does nothing).
+/**
+ * Inject the overlay into the current active tab. The panel was opened by the
+ * action click, so activeTab covers that tab (the service worker can't do this:
+ * sidePanel.open must be the FIRST thing a gesture does, so the worker does
+ * nothing). Re-runnable via the "Attach to current tab" button — the common
+ * failure is clicking the action while parked on chrome://extensions.
+ */
+async function attach() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab ? tab.id : null;
   await chrome.storage.session.set({ authoringTabId: tabId });
-  if (tabId != null) {
-    try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
-      await chrome.storage.session.remove('injectError');
-    } catch (e) {
-      // chrome:// pages, the Web Store, PDFs — nothing we can do there.
-      await chrome.storage.session.set({ injectError: String((e && e.message) || e) });
-    }
+
+  const noteEl = $('inject-note');
+  const msgEl = $('inject-msg');
+  if (tabId == null) {
+    msgEl.textContent = 'No active tab found.';
+    noteEl.hidden = false;
+    return false;
   }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+    noteEl.hidden = true;
+    return true;
+  } catch (e) {
+    const err = String((e && e.message) || e);
+    const url = tab.url || '';
+    let hint = 'Extension pages (chrome://), the Web Store, and PDFs can\'t be authored. ' +
+      'Switch to the page you want to film and click the tapeworm toolbar icon there ' +
+      '(that grants access to that tab), or try the button below.';
+    if (url.startsWith('file:')) {
+      hint = 'This is a file:// page: enable "Allow access to file URLs" for this extension in chrome://extensions, then attach again.';
+    }
+    msgEl.textContent = 'Couldn\'t attach to this page. ' + hint + ' (' + err + ')';
+    noteEl.hidden = false;
+    return false;
+  }
+}
+
+async function syncPage() {
   await loadState();
   for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
     $(id).value = String(state.settings[key]);
@@ -373,4 +395,13 @@ const CONTENT_SCRIPTS = [
   if (info) onPageInfo(info);
   await send('settings', state.settings);
   refreshDuration();
+}
+
+$('reattach').addEventListener('click', async () => {
+  if (await attach()) await syncPage();
+});
+
+(async function boot() {
+  await attach();
+  await syncPage();
 })();

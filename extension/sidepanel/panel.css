@@ -12,6 +12,7 @@ h1 { font-size: 15px; }
 .muted { color: #8a8f98; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .note { background: #fff3d6; border-radius: 6px; padding: 9px 11px; margin-bottom: 10px; line-height: 1.45; }
+.note button { margin-top: 7px; }
 
 .settings { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
 .settings label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: #8a8f98; }
