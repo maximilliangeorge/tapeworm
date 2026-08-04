@@ -131,6 +131,41 @@ test('click steps pin an action to the exact frame, dwell for settle, and force 
   assert.match(plan[1], /click \.cta, settle 2\.00s/);
 });
 
+test('a navigating click: later anchors resolve on the NEW page, settle dwells at scroll 0', async () => {
+  // .destination only exists after the click "navigates" — resolving it upfront
+  // (the old behaviour) is exactly the bug this guards against.
+  let onNewPage = false;
+  const session = {
+    async eval(expr: string) {
+      const m = expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s);
+      if (!m) throw new Error(`unexpected eval: ${expr}`);
+      const a = JSON.parse(m[1]);
+      if (a === 'top') return 0;
+      if (typeof a === 'object' && a.selector === '.destination') return onNewPage ? 1200 : undefined;
+      return undefined;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: 'a.nav' }, settle: 1 },
+    { type: 'move', to: { selector: '.destination' }, duration: 1, ease: 'linear', hold: 0.5 },
+  ]);
+  const performed: string[] = [];
+  const track = await buildTrack(session, cfg, {
+    perform: async (step) => {
+      performed.push(step.type);
+      onNewPage = true;
+      return { navigated: true };
+    },
+  });
+  assert.deepEqual(performed, ['click'], 'the click was actually performed during the build');
+  // 10 hold + 10 settle + 10 move + 5 hold @10fps
+  assert.equal(track.offsets.length, 35);
+  assert.deepEqual(track.offsets.slice(10, 20), Array(10).fill(0), 'settle dwells at the new page top');
+  assert.equal(track.offsets[29], 1200, 'the move lands on the new-page anchor');
+  assert.match(track.plan[1], /click a\.nav → navigates/);
+});
+
 test('auto mode: discovered sections become the timeline, empty discovery falls back to a full sweep', async () => {
   const found = await buildTrack(fakeSession({ max: 4000, sections: [0, 1500, 3000] }), cfgWith([]));
   assert.equal(found.offsets[0], 0);

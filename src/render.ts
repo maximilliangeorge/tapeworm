@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { launch } from './browser.ts';
 import type { Connection, Session } from './cdp.ts';
 import { concatSegments, createEncoder, createPngWriter, type Encoder } from './encode.ts';
-import { openPage, prewarm } from './page.ts';
+import { openPage, prewarm, resetPage, settleNewDocument, waitForDocumentReady } from './page.ts';
 import { strobeThreshold } from './easing.ts';
 import { buildTrack, peakStep, type Track } from './timeline.ts';
 import type { Resolved, Step } from './types.ts';
@@ -63,8 +63,18 @@ async function captureFrame(session: Session, y: number, tSec: number, cfg: Reso
  * (Input.dispatchMouseEvent), the same road unlockScroll takes. Synthetic DOM
  * clicks won't do: they carry isTrusted=false, produce no hover/active states,
  * and many libraries ignore them.
+ *
+ * A click may navigate. That's detected with a marker the new document can't
+ * have, and the new page is then settled and pre-warmed like any other before
+ * the render goes on — the report tells the caller scroll is back at 0.
  */
-async function performAction(session: Session, step: Step & { type: 'click' | 'hover' }, y: number): Promise<void> {
+async function performAction(
+  session: Session,
+  cfg: Resolved,
+  step: Step & { type: 'click' | 'hover' },
+  y: number,
+  note: (s: string) => void,
+): Promise<{ navigated: boolean }> {
   await session.eval(`window.__sr.setScroll(${y})`);
   const target = step.target as { selector: string; nth?: number };
   const pt = await session.eval<{ found: boolean; x: number; y: number; visible: boolean }>(
@@ -73,6 +83,7 @@ async function performAction(session: Session, step: Step & { type: 'click' | 'h
   if (!pt?.found) {
     throw new Error(`cannot ${step.type} "${target.selector}": selector matched nothing at that point in the timeline`);
   }
+  await session.eval('window.__srNavProbe = true').catch(() => {});
   const at = { x: Math.round(pt.x), y: Math.round(pt.y) };
   await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
   if (step.type === 'click') {
@@ -81,7 +92,20 @@ async function performAction(session: Session, step: Step & { type: 'click' | 'h
   }
   // give the page's handlers a beat of real time; the animations they start are
   // then driven per-frame by the virtual clock like everything else
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 150));
+
+  const stillSameDocument = await session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
+  if (stillSameDocument) return { navigated: false };
+
+  // The click navigated. Wait the new document in, then give it the standard
+  // treatment — intro, consent, scroll gate, pre-warm — so the frames after
+  // this point film a ready page, not a loading one.
+  await waitForDocumentReady(session);
+  const where = await session.eval<string>('location.href').catch(() => '(unknown)');
+  note(`${step.type} on ${target.selector} navigated to ${where} — settling and pre-warming`);
+  for (const n of await settleNewDocument(session, cfg)) note(n);
+  for (const n of await prewarm(session, cfg)) note(n);
+  return { navigated: true };
 }
 
 export class ScrollDrift extends Error {
@@ -103,7 +127,12 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   const lead = await startWorker(cfg, chromePath);
   let track: Track;
   try {
-    track = await buildTrack(lead.session, cfg);
+    // Interactions are PERFORMED while the track is built — a click that
+    // navigates has to actually happen before the anchors on the far side of
+    // it can resolve. The page is reset before the capture pass below.
+    track = await buildTrack(lead.session, cfg, {
+      perform: (step, y) => performAction(lead.session, cfg, step, y, note),
+    });
   } catch (e) {
     lead.conn.close();
     throw e;
@@ -149,6 +178,13 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   }
   progress.onPlan?.(track.plan, track, notes);
 
+  // The build pass executed the interactions, so the page is wherever the last
+  // click left it — reset to the configured URL for the capture pass.
+  if (track.sequential) {
+    note('resetting the page for the capture pass');
+    for (const n of await resetPage(lead.session, cfg)) note(n);
+  }
+
   const jobs = Math.max(1, Math.min(cfg.jobs, Math.ceil(total / 15)));
   mkdirSync(dirname(cfg.outPath) || '.', { recursive: true });
 
@@ -190,7 +226,11 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
           const t = n / cfg.fps;
           for (const action of track.actions) {
             if (action.frame !== n) continue;
-            await performAction(worker.session, action.step as Step & { type: 'click' | 'hover' }, y);
+            const r = await performAction(worker.session, cfg, action.step as Step & { type: 'click' | 'hover' }, y, note);
+            if (r.navigated) {
+              // brand-new document: fresh runtime, fresh animation state
+              await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
+            }
           }
           let png: Buffer;
           try {

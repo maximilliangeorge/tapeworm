@@ -31,8 +31,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
   render sequentially (`jobs` forced to 1). The extension gained ＋ Click /
   ＋ Hover arm modes that record the next picked element as an interaction,
   and its preview emulates hovers (synthetic mouse events + cloned `:hover`
-  CSS rules, ended by later interactions, scrub-aware). `wait` remains
-  format-only.
+  CSS rules, ended by later interactions, scrub-aware) and clicks (fired once
+  during playback; effects persist until the page is reloaded). `wait`
+  remains format-only.
+- Clicks that navigate are supported: anchors after the click resolve on the
+  destination page. Interactions are performed while the plan is built, the
+  page is reset for the capture pass, and each mid-render navigation is
+  settled and pre-warmed before filming continues.
 
 - Timeline format v2: `timeline` entries may now be typed steps (`start`,
   `move`, `hold`) as well as the existing segment form, mixed freely. Legacy

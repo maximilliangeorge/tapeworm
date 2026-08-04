@@ -78,6 +78,47 @@ export async function openPage(conn: Connection, cfg: Resolved): Promise<OpenRes
   return { session, notes };
 }
 
+/**
+ * The parts of openPage that must re-run whenever the DOCUMENT changes — after
+ * a click that navigates, or after resetting for the capture pass. The injected
+ * runtime re-arrives on its own (Page.addScriptToEvaluateOnNewDocument), but
+ * intros, consent, scroll gates, and hijackers are all per-document state.
+ */
+export async function settleNewDocument(session: Session, cfg: Resolved): Promise<string[]> {
+  const notes: string[] = [];
+  if (cfg.page.settle > 0) await sleep(cfg.page.settle);
+  if (cfg.page.waitForIntro > 0) await waitForAnimationsIdle(session, cfg.page.waitForIntro);
+  await session.eval('window.__sr && window.__sr.setMode("live")').catch(() => {});
+  if (cfg.page.dismissConsent) {
+    const hit = await session.eval<boolean>('window.__sr.dismissConsent()').catch(() => false);
+    if (hit) notes.push('dismissed a consent dialog');
+  }
+  if (cfg.page.unlockIntro.enabled) await unlockScroll(session, cfg).catch(() => null);
+  const hijackers = await session.eval<string[]>('window.__sr.neutraliseHijackers()').catch(() => []);
+  if (hijackers?.length) notes.push(`neutralised ${hijackers.join(', ')}`);
+  return notes;
+}
+
+/** Poll until the (possibly brand-new) document is loaded and the runtime answers. */
+export async function waitForDocumentReady(session: Session, timeoutMs = 20_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const ready = await session
+      .eval<boolean>('document.readyState === "complete" && !!window.__sr')
+      .catch(() => false); // context torn down mid-navigation — keep polling
+    if (ready) return;
+    await sleep(200);
+  }
+}
+
+/** Return to the configured URL and get the page back into a filmable state. */
+export async function resetPage(session: Session, cfg: Resolved): Promise<string[]> {
+  await navigate(session, cfg.url);
+  const notes = await settleNewDocument(session, cfg);
+  notes.push(...(await prewarm(session, cfg)));
+  return notes;
+}
+
 export async function navigate(session: Session, url: string): Promise<void> {
   const idle = waitForLifecycle(session, 'networkIdle', 20_000);
   await session.send('Page.navigate', { url });

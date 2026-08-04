@@ -69,7 +69,18 @@ export async function autoTimeline(session: Session, maxSections: number): Promi
   return steps;
 }
 
-export async function buildTrack(session: Session, cfg: Resolved): Promise<Track> {
+export type BuildOptions = {
+  /**
+   * Actually perform a click/hover while the track is being built. Without
+   * this, anchors that only exist on the page a click navigates TO cannot
+   * resolve — the walk has to take the click to see the other side. The
+   * callback reports whether the document changed (scroll resets to 0 there,
+   * and everything after resolves against the new page).
+   */
+  perform?: (step: Step & { type: 'click' | 'hover' }, y: number) => Promise<{ navigated: boolean }>;
+};
+
+export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOptions = {}): Promise<Track> {
   let steps = cfg.timeline;
   if (cfg.auto || steps.length === 0) {
     const max = cfg.auto ? cfg.auto.maxSections : 6;
@@ -108,10 +119,18 @@ export async function buildTrack(session: Session, cfg: Resolved): Promise<Track
       // triggered animates — the birth-time machinery in runtime.ts picks any
       // new animation up at the right frame automatically.
       actions.push({ frame: offsets.length, step });
+      // Performing it NOW is what lets later anchors resolve on whatever page
+      // the click leads to. A navigation puts the new document at scroll 0.
+      const performed = opts.perform ? await opts.perform(step, y) : { navigated: false };
+      if (performed.navigated) y = 0;
       const settle = step.settle ?? DEFAULT_SETTLE;
       const settleFrames = Math.max(1, Math.round(settle * cfg.fps));
       for (let f = 0; f < settleFrames; f++) offsets.push(snap(y));
-      plan.push(`${startT.toFixed(2)}s  ${step.type} ${describe(step.target)}, settle ${settle.toFixed(2)}s`);
+      plan.push(
+        `${startT.toFixed(2)}s  ${step.type} ${describe(step.target)}` +
+          (performed.navigated ? ' → navigates' : '') +
+          `, settle ${settle.toFixed(2)}s`,
+      );
       continue;
     }
 
