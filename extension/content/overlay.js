@@ -265,6 +265,84 @@ function safeResolve(anchor) {
   try { return A.resolveAnchor(anchor); } catch (e) { return null; }
 }
 
+// ---------------------------------------------------------------- hover emulation (preview only)
+/**
+ * The render performs hovers with REAL input (trusted, :hover just works).
+ * A content script can't do that, so the preview approximates: synthetic
+ * mouse events for JS-driven hover behaviour, plus a one-time clone of every
+ * CSS :hover rule with a marker class — DevTools' "force element state"
+ * trick — for the styling. Close enough to judge timing and framing by;
+ * the render remains the truth.
+ */
+let hoverRulesEl = null;
+let hoverEl = null;
+
+function ensureHoverRules() {
+  if (hoverRulesEl) return;
+  const chunks = [];
+  for (const sheet of Array.from(document.styleSheets || [])) {
+    let rules;
+    try { rules = sheet.cssRules; } catch (e) { continue; } // cross-origin sheet
+    for (const r of Array.from(rules || [])) {
+      let text;
+      try { text = r.cssText; } catch (e) { continue; }
+      if (text && text.indexOf(':hover') !== -1) {
+        chunks.push(text.split(':hover').join('.__tw-hover'));
+      }
+    }
+  }
+  hoverRulesEl = document.createElement('style');
+  hoverRulesEl.id = '__tw_hover_rules';
+  hoverRulesEl.textContent = chunks.join('\n');
+  document.documentElement.appendChild(hoverRulesEl);
+}
+
+function fireMouse(el, type, bubbles) {
+  try {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent(type, {
+      bubbles: bubbles !== false,
+      cancelable: true,
+      view: window,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2,
+    }));
+  } catch (e) {}
+}
+
+/** Make `anchor`'s element the hovered one (null = nothing hovered). */
+function setPreviewHover(anchor) {
+  let el = null;
+  if (anchor) {
+    try { el = document.querySelectorAll(anchor.selector)[anchor.nth || 0] || null; } catch (e) {}
+  }
+  if (el === hoverEl) return;
+  if (hoverEl) {
+    fireMouse(hoverEl, 'mouseout');
+    fireMouse(hoverEl, 'mouseleave', false);
+    for (let n = hoverEl; n && n.classList; n = n.parentElement) n.classList.remove('__tw-hover');
+  }
+  hoverEl = el;
+  if (el) {
+    ensureHoverRules();
+    fireMouse(el, 'mouseover');
+    fireMouse(el, 'mouseenter', false);
+    fireMouse(el, 'mousemove');
+    // :hover applies to every ancestor of the hovered element too
+    for (let n = el; n && n.classList; n = n.parentElement) n.classList.add('__tw-hover');
+  }
+}
+
+/** What should be hovered at time t: the last hover before t, ended by any later interaction. */
+function hoverAnchorAt(geo, t) {
+  let current = null;
+  for (const ev of geo.pointerEvents) {
+    if (ev.t > t) break;
+    current = ev.anchor;
+  }
+  return current;
+}
+
 // ---------------------------------------------------------------- preview
 /**
  * Resolve the timeline to piecewise segments ONCE at play/seek time, using the
@@ -273,6 +351,7 @@ function safeResolve(anchor) {
  */
 function buildGeometry(steps) {
   const segs = [];   // { t0, t1, from, to, easeFn } — holds are from===to
+  const pointerEvents = []; // { t, anchor|null } — hover starts / hover-ending interactions
   let t = 0;
   let y = 0;
   const errors = [];
@@ -303,16 +382,19 @@ function buildGeometry(steps) {
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
       if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null }); t += hold; }
     } else if (step.type === 'click' || step.type === 'hover') {
-      // The preview can't dispatch trusted input, so the interaction itself
-      // doesn't happen — but its settle time must still pass, or every
-      // timestamp after it would disagree with the render.
+      // Clicks can't happen in the preview (no trusted input, and they'd
+      // mutate page state scrubbing couldn't undo) — but their settle time
+      // must still pass or every later timestamp would disagree with the
+      // render. Hovers ARE emulated (see setPreviewHover); a later
+      // interaction moves the pointer and ends them, matching the render.
+      pointerEvents.push({ t, anchor: step.type === 'hover' ? step.target : null });
       const settle = step.settle != null ? step.settle : 0.6;
       segs.push({ t0: t, t1: t + settle, from: y, to: y, easeFn: null });
       t += settle;
     }
     // wait: not executable yet — previewed as nothing, same as render
   }
-  return { segments: segs, total: t, errors };
+  return { segments: segs, total: t, errors, pointerEvents };
 }
 
 function offsetAt(geo, tSec) {
@@ -329,7 +411,7 @@ function offsetAt(geo, tSec) {
 }
 
 function play(steps) {
-  stopPreview();
+  stopPreview(true);
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
   preview = { geo, startWall: performance.now(), offsetSec: 0, playing: true, raf: 0 };
@@ -337,6 +419,7 @@ function play(steps) {
     if (!preview || !preview.playing) return;
     const t = preview.offsetSec + (performance.now() - preview.startWall) / 1000;
     A.setScroll(offsetAt(preview.geo, t));
+    setPreviewHover(hoverAnchorAt(preview.geo, t));
     emit('preview:time', { t, total: preview.geo.total });
     if (t >= preview.geo.total) {
       preview.playing = false;
@@ -350,16 +433,18 @@ function play(steps) {
 }
 
 function seek(steps, tSec) {
-  stopPreview();
+  stopPreview(true); // keep any live hover — setPreviewHover below no-ops if unchanged
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
   A.setScroll(offsetAt(geo, tSec));
+  setPreviewHover(hoverAnchorAt(geo, tSec));
   return { total: geo.total, t: Math.max(0, Math.min(tSec, geo.total)) };
 }
 
-function stopPreview() {
+function stopPreview(keepHover) {
   if (preview && preview.raf) cancelAnimationFrame(preview.raf);
   preview = null;
+  if (!keepHover) setPreviewHover(null);
 }
 
 /**

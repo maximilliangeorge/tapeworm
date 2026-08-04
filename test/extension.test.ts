@@ -71,7 +71,7 @@ function fakeEl(): any {
   return el;
 }
 
-function bootOverlay(opts: { maxScroll?: number } = {}) {
+function bootOverlay(opts: { maxScroll?: number; queries?: Record<string, unknown[]> } = {}) {
   const docHeight = (opts.maxScroll ?? 4000) + 700; // + innerHeight below
   const window: any = {
     innerWidth: 1000,
@@ -91,7 +91,7 @@ function bootOverlay(opts: { maxScroll?: number } = {}) {
       documentElement: Object.assign(fakeEl(), { scrollHeight: docHeight }),
       body: { innerText: '' },
       createElement: () => fakeEl(),
-      querySelectorAll: () => [],
+      querySelectorAll: (sel: string) => (opts.queries ? opts.queries[sel] ?? [] : []),
       elementFromPoint: () => null,
     },
   };
@@ -147,6 +147,35 @@ test('overlay seek lands the same offsets the renderer would', () => {
   assert.equal(w.scrollY, 2000);
   O.seek(steps, 99);
   assert.equal(w.scrollY, 4000, 'clamped to the end');
+});
+
+test('preview emulates hover: marker class applied at hover time, cleared by later interactions', () => {
+  const classes = new Set<string>();
+  const menu: any = {
+    nodeType: 1,
+    parentElement: null,
+    getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+    classList: {
+      add: (c: string) => classes.add(c),
+      remove: (c: string) => classes.delete(c),
+    },
+  };
+  const w = bootOverlay({ queries: { '.menu': [menu] } });
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  const steps = [
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'hover', target: { selector: '.menu' }, settle: 1 },
+    { type: 'click', target: { selector: '.btn' }, settle: 1 },
+  ];
+  O.seek(steps, 1.5); // mid-hover-settle
+  assert.ok(classes.has('__tw-hover'), 'hover class applied during the hover span');
+  O.seek(steps, 2.5); // after the click — the pointer moved away
+  assert.ok(!classes.has('__tw-hover'), 'a later interaction ends the hover');
+  O.seek(steps, 1.2);
+  assert.ok(classes.has('__tw-hover'), 'scrubbing back re-applies it');
+  O.stopPreview();
+  assert.ok(!classes.has('__tw-hover'), 'stopping the preview clears it');
 });
 
 test('overlay reports whether the window IS the render viewport — never a scaled stand-in', () => {

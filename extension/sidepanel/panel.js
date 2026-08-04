@@ -179,7 +179,9 @@ function renderSteps() {
       li.append(row(sel, ...badges, icons(i)));
       li.append(row(
         field('settle s', numInput(step.settle, '0.6', (v) => { step.settle = v == null ? undefined : v; commit(); })),
-        span('sel', 'real input during render; preview skips it'),
+        span('sel', step.type === 'hover'
+          ? 'emulated in preview; real input in render'
+          : 'preview skips it; real input in render'),
       ));
     } else {
       li.append(row(span('sel', step.type + ' (not executable yet)'), badge('warn'), icons(i)));

@@ -27,8 +27,11 @@ config the renderer runs unchanged.
    generated selector and a quality grade — `structural` is flagged as fragile.
    **＋ Click** / **＋ Hover** arm interaction mode instead: the next element you
    click is recorded as a click or hover step, performed with real trusted
-   input during the render (the in-browser preview skips it — content scripts
-   can't fake trusted input — but its settle time still counts).
+   input during the render. In the preview, hovers are emulated (synthetic
+   mouse events plus cloned `:hover` CSS rules — close enough to judge timing
+   by; the render is the truth). Clicks are skipped in the preview — no
+   trusted input from a content script, and they'd mutate page state that
+   scrubbing couldn't undo — but their settle time still counts.
 5. Adjust align / offset / duration / ease / hold per keyframe; add holds;
    reorder; click a keyframe's selector to jump the page to it.
 6. **▶ Preview** plays the timeline in real time with the same easing math the
