@@ -2,6 +2,12 @@
  * The side-panel editor. Owns the timeline being authored; the content-script
  * overlay owns the page. All state lives here + chrome.storage.session (MV3
  * service workers get evicted, so nothing may live in the background worker).
+ *
+ * Structure mirrors the authoring sequence the renderer needs: readiness chips
+ * (viewport match / warm-up / scroll gate) answer "will the render match what
+ * I'm seeing?", setup is a stage that collapses once the viewport fits, and
+ * the timeline area is a duration ruler (which doubles as the scrubber) over
+ * collapsed step rows that expand to edit.
  */
 'use strict';
 
@@ -20,6 +26,11 @@ let totalSec = 0;
 let playing = false;
 let picking = null; // null | 'move' | 'click' | 'hover'
 let currentPageUrl = ''; // where the tab is NOW — the timeline's url is pinned on the start step
+let lastInfo = null;     // most recent page:info payload
+let lastSpans = [];      // per-step {index, type, t0, t1} from the overlay's geometry
+let warmed = false;      // per-panel-lifetime; page reloads silently reset the page, so stay honest
+let expandedIndex = null; // which step row shows its editor
+let prevMatched = false; // for the collapse-setup-on-first-match transition
 
 // ---------------------------------------------------------------- messaging
 async function send(type, data) {
@@ -71,26 +82,36 @@ function onPicked(d) {
   } else {
     state.steps.push({ type: 'move', to: d.anchor, ease: 'natural', _quality: d.quality });
   }
-  saveState();
-  renderSteps();
-  refreshDuration();
+  expandedIndex = state.steps.length - 1;
+  commit();
 }
 
 function onPageInfo(d) {
+  lastInfo = d;
   currentPageUrl = d.url || currentPageUrl;
   state.title = d.title || state.title;
   $('page-title').textContent = state.title || currentPageUrl;
-  $('gate-note').hidden = !d.scrollGated;
+
+  const gated = !!d.scrollGated;
+  $('chip-gate').hidden = !gated;
+  $('gate-note').hidden = !gated;
+
   if (d.window) {
-    const s = $('vp-status');
+    const chip = $('chip-vp');
     if (d.viewportMatched) {
-      s.className = 'ok';
-      s.textContent = d.window.width + '×' + d.window.height + ' ✓';
+      chip.className = 'chip ok';
+      chip.textContent = d.window.width + '×' + d.window.height + ' ✓';
+      if (!prevMatched) $('setup').open = false; // setup got you here; give the timeline the space
+      prevMatched = true;
     } else {
-      s.className = 'bad';
-      s.textContent = d.window.width + '×' + d.window.height + ' ✗';
+      chip.className = 'chip warn';
+      chip.textContent = d.window.width + '×' + d.window.height + ' ✗ — fit window';
+      if (prevMatched) $('setup').open = true; // it broke — send them back to setup
+      prevMatched = false;
     }
   }
+  renderSetupSum();
+  renderEmpty();
   saveState();
 }
 
@@ -121,7 +142,7 @@ async function fitWindow() {
   if (info) {
     onPageInfo(info);
     if (!info.viewportMatched) {
-      $('vp-status').textContent += ' — screen too small for ' +
+      $('chip-vp').textContent += ' — screen too small for ' +
         state.settings.width + '×' + state.settings.height;
     }
   }
@@ -129,9 +150,111 @@ async function fitWindow() {
 
 function onPreviewTime(d) {
   totalSec = d.total;
-  $('scrub').value = String(Math.round((d.t / d.total) * 1000));
-  $('time').textContent = d.t.toFixed(1) + 's / ' + d.total.toFixed(1) + 's';
+  setPlayhead(d.t, d.total);
 }
+
+// ---------------------------------------------------------------- readiness + stages
+function renderSetupSum() {
+  const s = state.settings;
+  $('setup-sum').textContent = s.width + '×' + s.height + ' @' + s.dpr + 'x · ' + s.fps + ' fps';
+}
+
+function setWarmed(v) {
+  warmed = v;
+  const chip = $('chip-warm');
+  chip.className = v ? 'chip ok' : 'chip warn';
+  chip.textContent = v ? 'warmed ✓' : 'not warmed';
+  renderEmpty();
+}
+
+function renderEmpty() {
+  const fresh = state.steps.length <= 1;
+  $('empty').hidden = !fresh;
+  if (!fresh) return;
+  check($('e-fit'), !!(lastInfo && lastInfo.viewportMatched), '1');
+  check($('e-warm'), warmed, '2');
+  check($('e-pick'), false, '3');
+  function check(el, done, n) {
+    el.className = done ? 'chip ok' : 'chip';
+    el.textContent = done ? '✓' : n;
+  }
+}
+
+// ---------------------------------------------------------------- duration ruler
+function spanFor(i) {
+  return lastSpans.find((s) => s.index === i) || null;
+}
+
+function renderRuler() {
+  const wrap = $('ruler-wrap');
+  const authored = state.steps.length > 1 && totalSec > 0;
+  wrap.hidden = !authored;
+  $('tl-sum').textContent = state.steps.length > 1
+    ? state.steps.length + ' steps · ' + totalSec.toFixed(1) + 's'
+    : '';
+  if (!authored) return;
+
+  const ruler = $('ruler');
+  ruler.innerHTML = '';
+  const track = document.createElement('div');
+  track.id = 'ruler-track';
+  ruler.appendChild(track);
+  const ordered = [...lastSpans].sort((a, b) => a.t0 - b.t0);
+  for (const s of ordered) {
+    const seg = document.createElement('div');
+    const secs = s.t1 - s.t0;
+    if (s.type === 'click' || s.type === 'hover') {
+      seg.className = 'seg act';
+      seg.textContent = s.type === 'click' ? '⊕' : '⊙';
+    } else if (s.type === 'move') {
+      seg.className = 'seg';
+      seg.style.flexGrow = String(secs);
+      seg.textContent = secs.toFixed(1);
+    } else { // start, hold
+      seg.className = 'seg hold';
+      seg.style.flexGrow = String(secs);
+      seg.textContent = secs.toFixed(1);
+    }
+    seg.title = 'step ' + (s.index + 1) + ' — ' + secs.toFixed(1) + 's';
+    track.appendChild(seg);
+  }
+  const ph = document.createElement('div');
+  ph.id = 'playhead';
+  ruler.appendChild(ph);
+  $('total').textContent = totalSec.toFixed(1) + 's';
+}
+
+function setPlayhead(t, total) {
+  const ph = document.getElementById('playhead');
+  if (ph && total > 0) ph.style.left = 'calc(' + ((t / total) * 100).toFixed(2) + '% - 1px)';
+  $('time').textContent = t.toFixed(1) + 's';
+}
+
+// scrubbing: dragging the ruler IS seeking — reading and driving the timeline
+// are the same surface
+let scrubBusy = false;
+function rulerSeek(ev) {
+  const r = $('ruler').getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+  const t = frac * totalSec;
+  setPlayhead(t, totalSec); // optimistic — the overlay confirms via the response
+  if (scrubBusy) return;
+  scrubBusy = true;
+  send('preview:seek', { steps: state.steps.map(stripInternal), t }).then((res) => {
+    scrubBusy = false;
+    if (res) setPlayhead(res.t, res.total);
+  });
+}
+
+$('ruler').addEventListener('pointerdown', (ev) => {
+  if (state.steps.length < 2) return;
+  if (playing) { playing = false; $('play').textContent = '▶ Preview'; }
+  $('ruler').setPointerCapture(ev.pointerId);
+  rulerSeek(ev);
+});
+$('ruler').addEventListener('pointermove', (ev) => {
+  if (ev.buttons & 1) rulerSeek(ev);
+});
 
 // ---------------------------------------------------------------- steps UI
 function shortUrl(u) {
@@ -144,68 +267,145 @@ function anchorLabel(a) {
   return a.selector + (a.nth ? ' [' + a.nth + ']' : '');
 }
 
+/** A drawn easing curve — designers read curves faster than the word "inOutQuint". */
+function easeSvg(ease) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'easecurve');
+  svg.setAttribute('width', '22');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 22 14');
+  let fn;
+  try { fn = globalThis.TapewormEasing.resolveEase(ease || 'natural', 1.5); } catch (e) { fn = (t) => t; }
+  let d = 'M 1 13';
+  for (let i = 1; i <= 12; i++) {
+    const t = i / 12;
+    d += ' L ' + (1 + 20 * t).toFixed(1) + ' ' + (13 - 12 * fn(t)).toFixed(1);
+  }
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', d);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke-width', '1.5');
+  svg.appendChild(path);
+  const title = document.createElementNS(NS, 'title');
+  title.textContent = ease || 'natural';
+  svg.appendChild(title);
+  return svg;
+}
+
+function durLabel(step, i) {
+  const s = spanFor(i);
+  if (step.type === 'start') return 'hold ' + (step.hold != null ? step.hold : 0.8).toFixed(1) + 's';
+  if (step.type === 'hold') return (step.seconds != null ? step.seconds : 1).toFixed(1) + 's';
+  if (step.type === 'click' || step.type === 'hover') {
+    return 'settle ' + (step.settle != null ? step.settle : 0.6).toFixed(1) + 's';
+  }
+  return s ? (s.t1 - s.t0).toFixed(1) + 's' : '…'; // move: its full slice, implicit hold included
+}
+
 function renderSteps() {
   const ol = $('steps');
   ol.innerHTML = '';
   state.steps.forEach((step, i) => {
     const li = document.createElement('li');
-    li.className = 'step';
+    li.className = 'step' + (expandedIndex === i ? ' open' : '');
+
+    const row1 = div('row1');
+    row1.append(span('idx', step.type === 'start' ? 'S' : String(i)));
+
     if (step.type === 'start') {
-      const label = span('sel', 'start at ' + anchorLabel(step.at) +
+      const label = span('sel muted', 'start at ' + anchorLabel(step.at) +
         (step.url ? ' — ' + shortUrl(step.url) : ' (url pinned on first pick)'));
       if (step.url) label.title = step.url;
-      li.append(row(
-        label,
-        field('hold s', numInput(step.hold, 0.8, (v) => { step.hold = v; commit(); })),
-      ));
+      row1.append(label);
     } else if (step.type === 'hold') {
-      li.append(row(
-        span('sel', 'hold'),
-        field('seconds', numInput(step.seconds, 1, (v) => { step.seconds = v == null ? 1 : v; commit(); })),
-        icons(i),
-      ));
+      row1.append(span('sel muted', 'hold'));
     } else if (step.type === 'move') {
       const sel = span('sel', anchorLabel(step.to));
-      sel.title = 'Jump the page to this anchor';
-      sel.addEventListener('click', () => send('jump', { anchor: step.to }));
-      const badges = [];
-      if (step._quality) badges.push(badge(step._quality));
-      if (typeof step.to === 'object' && step.to.fallbackText) sel.title += '\n"' + step.to.fallbackText + '"';
-      li.append(row(sel, ...badges, icons(i)));
-      const align = selectInput(['top', 'center', 'bottom'], (typeof step.to === 'object' && step.to.align) || 'top', (v) => {
-        if (typeof step.to === 'object') { if (v === 'top') delete step.to.align; else step.to.align = v; commit(); }
-      });
-      const offset = numInput(typeof step.to === 'object' ? step.to.offset : undefined, 0, (v) => {
-        if (typeof step.to === 'object') { if (v == null || v === 0) delete step.to.offset; else step.to.offset = v; commit(); }
-      });
-      li.append(row(
-        field('align', align),
-        field('offset px', offset),
-        field('duration s (auto)', numInput(step.duration, '', (v) => { step.duration = v == null ? undefined : v; commit(); })),
-        field('ease', selectInput(EASES, step.ease || 'natural', (v) => { step.ease = v; commit(); })),
-        field('hold s', numInput(step.hold, '', (v) => { step.hold = v == null ? undefined : v; commit(); })),
-      ));
+      if (typeof step.to === 'object' && step.to.fallbackText) sel.title = '"' + step.to.fallbackText + '"';
+      row1.append(sel);
+      if (step._quality) row1.append(badge(step._quality));
+      row1.append(easeSvg(step.ease));
     } else if (step.type === 'click' || step.type === 'hover') {
-      const sel = span('sel', (step.type === 'click' ? '⊕ click ' : '⊙ hover ') + anchorLabel(step.target));
-      sel.title = 'Jump the page to this element';
-      sel.addEventListener('click', () => send('jump', { anchor: step.target }));
-      const badges = step._quality ? [badge(step._quality)] : [];
-      li.append(row(sel, ...badges, icons(i)));
-      li.append(row(
-        field('settle s', numInput(step.settle, '0.6', (v) => { step.settle = v == null ? undefined : v; commit(); })),
-        span('sel', step.type === 'hover'
-          ? 'emulated in preview; real input in render'
-          : 'emulated in preview (effects persist — reload to reset); real input in render'),
-      ));
+      row1.append(span('sel', (step.type === 'click' ? '⊕ ' : '⊙ ') + anchorLabel(step.target)));
+      if (step._quality) row1.append(badge(step._quality));
     } else {
-      li.append(row(span('sel', step.type + ' (not executable yet)'), badge('warn'), icons(i)));
+      row1.append(span('sel', step.type + ' (not executable yet)'), badge('warn'));
     }
+
+    const dur = span('dur', durLabel(step, i));
+    dur.dataset.dur = String(i);
+    row1.append(dur);
+    row1.addEventListener('click', () => {
+      expandedIndex = expandedIndex === i ? null : i;
+      renderSteps();
+    });
+    li.append(row1);
+
+    if (expandedIndex === i) li.append(editor(step, i));
     ol.appendChild(li);
   });
 
-  function row(...kids) { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); return d; }
+  renderEmpty();
+  $('play').disabled = state.steps.length < 2;
+
+  function editor(step, i) {
+    const ed = div('editor');
+    ed.addEventListener('click', (ev) => ev.stopPropagation());
+    if (step.type === 'start') {
+      ed.append(field('hold s', numInput(step.hold, 0.8, (v) => { step.hold = v == null ? undefined : v; commit(); })));
+    } else if (step.type === 'hold') {
+      ed.append(field('seconds', numInput(step.seconds, 1, (v) => { step.seconds = v == null ? 1 : v; commit(); })));
+      ed.append(tools(i));
+    } else if (step.type === 'move') {
+      ed.append(
+        field('align', selectInput(['top', 'center', 'bottom'], (typeof step.to === 'object' && step.to.align) || 'top', (v) => {
+          if (typeof step.to === 'object') { if (v === 'top') delete step.to.align; else step.to.align = v; commit(); }
+        })),
+        field('offset px', numInput(typeof step.to === 'object' ? step.to.offset : undefined, 0, (v) => {
+          if (typeof step.to === 'object') { if (v == null || v === 0) delete step.to.offset; else step.to.offset = v; commit(); }
+        })),
+        field('duration s', numInput(step.duration, 'auto', (v) => { step.duration = v == null ? undefined : v; commit(); })),
+        field('ease', selectInput(EASES, step.ease || 'natural', (v) => { step.ease = v; commit(); })),
+        field('hold s', numInput(step.hold, '', (v) => { step.hold = v == null ? undefined : v; commit(); })),
+      );
+      ed.append(tools(i, step.to));
+    } else if (step.type === 'click' || step.type === 'hover') {
+      ed.append(field('settle s', numInput(step.settle, '0.6', (v) => { step.settle = v == null ? undefined : v; commit(); })));
+      const t = tools(i, step.target);
+      t.prepend(noteLine(step.type === 'hover'
+        ? 'emulated in preview; real input in render'
+        : 'emulated in preview (effects persist — reload to reset); real input in render'));
+      ed.append(t);
+    } else {
+      ed.append(tools(i));
+    }
+    return ed;
+  }
+
+  function tools(i, jumpAnchor) {
+    const t = div('tools');
+    const spacer = document.createElement('span');
+    spacer.style.flex = '1';
+    t.append(spacer);
+    if (jumpAnchor) t.append(iconBtn('⌖', 'Jump the page to this element', () => send('jump', { anchor: jumpAnchor })));
+    t.append(
+      iconBtn('↑', 'Move up', () => { if (i > 1) swap(i, i - 1); }),
+      iconBtn('↓', 'Move down', () => { if (i < state.steps.length - 1) swap(i, i + 1); }),
+      iconBtn('✕', 'Remove', () => {
+        state.steps.splice(i, 1);
+        if (expandedIndex === i) expandedIndex = null;
+        else if (expandedIndex != null && expandedIndex > i) expandedIndex--;
+        commit();
+      }),
+    );
+    return t;
+  }
+
+  function noteLine(text) { const s = span('note-line', text); return s; }
+  function div(cls) { const d = document.createElement('div'); d.className = cls; return d; }
   function span(cls, text) { const s = document.createElement('span'); s.className = cls; s.textContent = text; return s; }
-  function badge(q) { const b = document.createElement('span'); b.className = 'badge ' + q; b.textContent = q === 'structural' ? 'fragile' : q; return b; }
+  function badge(q) { const b = document.createElement('span'); b.className = 'qbadge ' + q; b.textContent = q === 'structural' ? 'fragile' : q; return b; }
   function field(label, input) {
     const w = document.createElement('label'); w.className = 'field';
     const t = document.createElement('span'); t.textContent = label;
@@ -213,7 +413,7 @@ function renderSteps() {
   }
   function numInput(value, placeholder, onChange) {
     const inp = document.createElement('input');
-    inp.type = 'number'; inp.step = '0.1'; inp.className = 'num';
+    inp.type = 'number'; inp.step = '0.1';
     inp.placeholder = String(placeholder);
     if (value !== undefined && value !== null) inp.value = String(value);
     inp.addEventListener('change', () => onChange(inp.value === '' ? null : Number(inp.value)));
@@ -226,23 +426,18 @@ function renderSteps() {
     s.addEventListener('change', () => onChange(s.value));
     return s;
   }
-  function icons(i) {
-    const wrap = document.createElement('span');
-    wrap.style.marginLeft = 'auto';
-    wrap.append(
-      iconBtn('↑', 'Move up', () => { if (i > 1) { swap(i, i - 1); } }),
-      iconBtn('↓', 'Move down', () => { if (i < state.steps.length - 1) { swap(i, i + 1); } }),
-      iconBtn('✕', 'Remove', () => { state.steps.splice(i, 1); commit(); }),
-    );
-    return wrap;
-  }
   function iconBtn(txt, title, fn) {
     const b = document.createElement('button');
     b.className = 'icon'; b.textContent = txt; b.title = title;
     b.addEventListener('click', fn);
     return b;
   }
-  function swap(a, b) { const t = state.steps[a]; state.steps[a] = state.steps[b]; state.steps[b] = t; commit(); }
+  function swap(a, b) {
+    const t = state.steps[a]; state.steps[a] = state.steps[b]; state.steps[b] = t;
+    if (expandedIndex === a) expandedIndex = b;
+    else if (expandedIndex === b) expandedIndex = a;
+    commit();
+  }
 }
 
 function commit() {
@@ -255,8 +450,15 @@ async function refreshDuration() {
   const r = await send('duration', { steps: state.steps.map(stripInternal) });
   if (r && typeof r.total === 'number') {
     totalSec = r.total;
-    $('time').textContent = '0.0s / ' + r.total.toFixed(1) + 's';
-    $('scrub').disabled = state.steps.length < 2;
+    lastSpans = r.spans || [];
+    renderRuler();
+    setPlayhead(0, totalSec);
+    // durations changed under the rows (auto-duration is page geometry) —
+    // update labels in place rather than re-rendering over live inputs
+    for (const el of document.querySelectorAll('[data-dur]')) {
+      const i = Number(el.dataset.dur);
+      if (state.steps[i]) el.textContent = durLabel(state.steps[i], i);
+    }
   }
 }
 
@@ -264,7 +466,7 @@ async function refreshDuration() {
 function setPicking(mode) {
   picking = mode;
   $('pick').classList.toggle('active', mode === 'move');
-  $('pick').textContent = mode === 'move' ? '✕ Stop picking (Esc)' : '＋ Pick element';
+  $('pick').textContent = mode === 'move' ? '✕ Stop (Esc)' : '＋ Keyframe';
   $('arm-click').classList.toggle('active', mode === 'click');
   $('arm-hover').classList.toggle('active', mode === 'hover');
 }
@@ -293,6 +495,7 @@ $('preset').addEventListener('change', async () => {
   state.settings.height = h;
   $('s-width').value = String(w);
   $('s-height').value = String(h);
+  renderSetupSum();
   await saveState();
   await send('settings', state.settings);
   await fitWindow();
@@ -301,14 +504,16 @@ $('preset').addEventListener('change', async () => {
 
 $('prepare').addEventListener('click', async () => {
   $('prepare').disabled = true;
-  $('prepare').textContent = '⟳ Preparing…';
+  $('prepare').textContent = '⟳ Warming…';
   await send('prepare');
   $('prepare').disabled = false;
-  $('prepare').textContent = '⟳ Prepare page';
+  $('prepare').textContent = '⟳ Warm up';
+  setWarmed(true);
 });
 
 $('add-hold').addEventListener('click', () => {
   state.steps.push({ type: 'hold', seconds: 1 });
+  expandedIndex = state.steps.length - 1;
   commit();
 });
 
@@ -323,16 +528,10 @@ $('play').addEventListener('click', async () => {
   if (r) { playing = true; $('play').textContent = '■ Stop'; }
 });
 
-$('scrub').addEventListener('input', async () => {
-  if (playing) { playing = false; $('play').textContent = '▶ Preview'; }
-  const t = (Number($('scrub').value) / 1000) * totalSec;
-  const r = await send('preview:seek', { steps: state.steps.map(stripInternal), t });
-  if (r) $('time').textContent = r.t.toFixed(1) + 's / ' + r.total.toFixed(1) + 's';
-});
-
 for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
   $(id).addEventListener('change', async () => {
     state.settings[key] = Number($(id).value);
+    renderSetupSum();
     await saveState();
     await send('settings', state.settings);
     const info = await send('info');
@@ -402,13 +601,21 @@ $('copy-cmd').addEventListener('click', async () => {
 $('copy').addEventListener('click', async () => {
   const cfg = await buildConfig();
   await navigator.clipboard.writeText(JSON.stringify(cfg, null, 2) + '\n');
-  $('copy').textContent = 'Copied ✓';
-  setTimeout(() => { $('copy').textContent = 'Copy JSON'; }, 1200);
+  $('more').open = false;
 });
 
 $('clear').addEventListener('click', () => {
+  $('more').open = false;
+  if (!confirm('Start over? This deletes the whole timeline.')) return;
   state.steps = [{ type: 'start', at: 'top', hold: 0.8 }];
+  expandedIndex = null;
   commit();
+});
+
+// the ⋯ menu is a <details>: close it when a click lands anywhere outside
+document.addEventListener('click', (ev) => {
+  const more = $('more');
+  if (more.open && !more.contains(ev.target)) more.open = false;
 });
 
 // ---------------------------------------------------------------- boot
@@ -446,7 +653,7 @@ async function attach() {
     const err = String((e && e.message) || e);
     const url = tab.url || '';
     let hint = 'Extension pages (chrome://), the Web Store, and PDFs can\'t be authored. ' +
-      'Switch to the page you want to film and click the tapeworm toolbar icon there ' +
+      'Switch to the page you want to film and click the Tapeworm toolbar icon there ' +
       '(that grants access to that tab), or try the button below.';
     if (url.startsWith('file:')) {
       hint = 'This is a file:// page: enable "Allow access to file URLs" for this extension in chrome://extensions, then attach again.';
@@ -463,6 +670,8 @@ async function syncPage() {
     $(id).value = String(state.settings[key]);
   }
   $('codec').value = state.codec || 'h264'; // pre-codec saved states lack the field
+  renderSetupSum();
+  setWarmed(warmed);
   renderSteps();
   const info = await send('info');
   if (info) onPageInfo(info);
@@ -491,7 +700,7 @@ $('reattach').addEventListener('click', async () => {
         'Couldn\'t attach to this page: ' + injectError + ' — extension pages (chrome://), ' +
         'the Web Store, and PDFs can\'t be authored, and file:// pages need ' +
         '"Allow access to file URLs" enabled in chrome://extensions. Switch to the page ' +
-        'you want to film and click the tapeworm toolbar icon there.';
+        'you want to film and click the Tapeworm toolbar icon there.';
       $('inject-note').hidden = false;
     } else {
       await attach(); // no worker error recorded — likely a stale panel; try directly

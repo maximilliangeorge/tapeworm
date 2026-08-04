@@ -369,7 +369,7 @@ function hoverAnchorAt(geo, t) {
  * timeline.ts — then drive TapewormAnchors.setScroll in real time.
  */
 function buildGeometry(steps) {
-  const segs = [];   // { t0, t1, from, to, easeFn } — holds are from===to
+  const segs = [];   // { t0, t1, from, to, easeFn, idx } — holds are from===to; idx = source step
   const pointerEvents = []; // { t, anchor|null } — hover starts / hover-ending interactions
   const clicks = []; // { t, target } — fired once as playback crosses them
   let t = 0;
@@ -383,10 +383,10 @@ function buildGeometry(steps) {
       if (r == null) { errors.push({ index: i, anchor: step.at }); continue; }
       y = r;
       const hold = step.hold != null ? step.hold : 0.8;
-      segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null });
+      segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null, idx: i });
       t += hold;
     } else if (step.type === 'hold') {
-      segs.push({ t0: t, t1: t + step.seconds, from: y, to: y, easeFn: null });
+      segs.push({ t0: t, t1: t + step.seconds, from: y, to: y, easeFn: null, idx: i });
       t += step.seconds;
     } else if (step.type === 'move') {
       const target = safeResolve(step.to);
@@ -395,12 +395,12 @@ function buildGeometry(steps) {
       const duration = step.duration != null
         ? step.duration
         : E.autoDuration(target - y, settings.height, easeFn);
-      segs.push({ t0: t, t1: t + duration, from: y, to: target, easeFn });
+      segs.push({ t0: t, t1: t + duration, from: y, to: target, easeFn, idx: i });
       t += duration;
       y = target;
       const isLast = i === steps.length - 1;
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
-      if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null }); t += hold; }
+      if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null, idx: i }); t += hold; }
     } else if (step.type === 'click' || step.type === 'hover') {
       // Both are emulated in the preview with synthetic (untrusted) events —
       // hovers continuously via setPreviewHover, clicks once as playback
@@ -410,7 +410,7 @@ function buildGeometry(steps) {
       pointerEvents.push({ t, anchor: step.type === 'hover' ? step.target : null });
       if (step.type === 'click') clicks.push({ t, target: step.target });
       const settle = step.settle != null ? step.settle : 0.6;
-      segs.push({ t0: t, t1: t + settle, from: y, to: y, easeFn: null });
+      segs.push({ t0: t, t1: t + settle, from: y, to: y, easeFn: null, idx: i });
       t += settle;
     }
     // wait: not executable yet — previewed as nothing, same as render
@@ -518,7 +518,16 @@ function jump(anchor) {
 
 function duration(steps) {
   const geo = buildGeometry(steps);
-  return { total: geo.total, errors: geo.errors };
+  // One span per contributing step: its full slice of the timeline, implicit
+  // holds included — what the panel's duration ruler draws. A move step "owns"
+  // its trailing hold; steps whose anchor failed to resolve produce no span.
+  const byStep = new Map();
+  for (const s of geo.segments) {
+    const got = byStep.get(s.idx);
+    if (got) { got.t0 = Math.min(got.t0, s.t0); got.t1 = Math.max(got.t1, s.t1); }
+    else byStep.set(s.idx, { index: s.idx, type: steps[s.idx].type, t0: s.t0, t1: s.t1 });
+  }
+  return { total: geo.total, errors: geo.errors, spans: Array.from(byStep.values()) };
 }
 
 globalThis.TapewormOverlay = {

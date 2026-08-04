@@ -1,4 +1,4 @@
-# tapeworm
+# 🪱 tapeworm
 
 Record website scrollthroughs as high-quality video, with keyframed scrolling and easing curves.
 

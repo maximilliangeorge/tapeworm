@@ -1,3 +1,5 @@
 node_modules/
 *.mp4
 *.mov
+*.png
+!extension/icons/*.png

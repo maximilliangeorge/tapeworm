@@ -26,12 +26,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `tapeworm author <url>` — visual authoring in a headful Chrome that IS the
   render environment (same flags, emulated viewport, injected runtime, pre-warm).
   Click elements to build a timeline; export with `--out config.json`.
-- A Chrome extension (`extension/`, load unpacked) for authoring in an ordinary
-  browser: element picker with selector quality grades, real-time preview and
-  scrubbing, a "prepare page" sweep that mirrors the renderer's pre-warm, and
-  JSON export. Recording is always the full viewport at the configured size, so
-  "Fit window" (with breakpoint presets) resizes the browser window until the
-  page viewport IS the render viewport, and an on-page badge reports the match.
+- A Chrome extension ("Tapeworm", `extension/`, load unpacked) for authoring in
+  an ordinary browser: element picker with selector quality grades, real-time
+  preview, a "warm up" sweep that mirrors the renderer's pre-warm, and JSON
+  export. The panel is staged around the authoring sequence — readiness chips
+  (viewport match / warm-up / scroll gate), a setup stage that collapses once
+  the viewport fits, and a to-scale duration ruler that doubles as the
+  scrubber over collapsible step rows with drawn easing curves. Recording is
+  always the full viewport at the configured size, so "Fit window" (with
+  breakpoint presets) resizes the browser window until the page viewport IS
+  the render viewport, and an on-page badge reports the match.
   MV3 with `activeTab`/`scripting`/`storage`/`sidePanel` only.
 - Exported configs carry a `meta` provenance block (`authoredWith`,
   `authoredAt`, `authoredViewport`, `url`); the renderer ignores it.

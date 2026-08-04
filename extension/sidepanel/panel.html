@@ -2,73 +2,104 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>tapeworm</title>
+<title>Tapeworm</title>
 <link rel="stylesheet" href="panel.css">
 </head>
 <body>
 <header>
-  <h1>tapeworm</h1>
+  <h1>Tapeworm</h1>
   <span id="page-title" class="muted"></span>
 </header>
 
-<div id="gate-note" class="note" hidden>
-  This page gates scrolling behind an intro. Scroll down manually in the page to
-  unlock it, then add keyframes. The renderer unlocks it automatically at capture time.
-</div>
 <div id="inject-note" class="note" hidden>
   <div id="inject-msg">Couldn't attach to this page.</div>
   <button id="reattach">Attach to current tab</button>
 </div>
 
-<section class="settings">
-  <label>Width <input id="s-width" type="number" value="1280" min="320" step="1"></label>
-  <label>Height <input id="s-height" type="number" value="800" min="320" step="1"></label>
-  <label>DPR
-    <select id="s-dpr"><option>1</option><option selected>2</option><option>3</option></select>
-  </label>
-  <label>FPS <input id="s-fps" type="number" value="60" min="1" max="240"></label>
-</section>
-<section class="viewport-row">
-  <select id="preset">
-    <option value="">Viewport preset…</option>
-    <option value="1280x800">Laptop 1280×800</option>
-    <option value="1440x900">Laptop 1440×900</option>
-    <option value="1920x1080">Desktop 1920×1080</option>
-    <option value="1024x768">Small laptop 1024×768</option>
-    <option value="768x1024">Tablet 768×1024</option>
-    <option value="390x844">Phone 390×844</option>
-  </select>
-  <button id="fit" class="primary" title="Resize this browser window so the page viewport exactly matches the render viewport — the recording is always the full viewport, so authoring must happen at the real size and breakpoint.">Fit window</button>
-  <span id="vp-status" class="muted"></span>
+<div class="ready">
+  <span id="chip-vp" class="chip warn" title="The render captures the full viewport at the configured size — author at that size or the layout may sit at a different breakpoint.">viewport ?</span>
+  <span id="chip-warm" class="chip warn" title="Warm up steps through the whole page so lazy content loads and scroll reveals fire — the state the renderer sees. Do it before picking.">not warmed</span>
+  <span id="chip-gate" class="chip bad" hidden title="The page gates scrolling behind an intro.">scroll gated</span>
+</div>
+<div id="gate-note" class="hint" hidden>
+  Scroll through the intro by hand once to unlock the page, then pick keyframes.
+  The renderer unlocks it automatically at capture time.
+</div>
+
+<details id="setup" class="stage" open>
+  <summary><span class="step-n">1</span> Set up the shot <span id="setup-sum" class="sum"></span></summary>
+  <div class="stage-body">
+    <div class="setup-grid">
+      <label>Width <input id="s-width" type="number" value="1280" min="320" step="1"></label>
+      <label>Height <input id="s-height" type="number" value="800" min="320" step="1"></label>
+      <label>DPR
+        <select id="s-dpr"><option>1</option><option selected>2</option><option>3</option></select>
+      </label>
+      <label>FPS <input id="s-fps" type="number" value="60" min="1" max="240"></label>
+    </div>
+    <div class="setup-row">
+      <select id="preset">
+        <option value="">Viewport preset…</option>
+        <option value="1280x800">Laptop 1280×800</option>
+        <option value="1440x900">Laptop 1440×900</option>
+        <option value="1920x1080">Desktop 1920×1080</option>
+        <option value="1024x768">Small laptop 1024×768</option>
+        <option value="768x1024">Tablet 768×1024</option>
+        <option value="390x844">Phone 390×844</option>
+      </select>
+      <button id="fit" class="primary" title="Resize this browser window so the page viewport exactly matches the render viewport — the recording is always the full viewport, so authoring must happen at the real size and breakpoint.">Fit window</button>
+      <button id="prepare" title="Scroll through the whole page so lazy content loads and reveals fire — the state the renderer sees. Do this before picking.">⟳ Warm up</button>
+    </div>
+  </div>
+</details>
+
+<section class="stage open">
+  <div class="stage-head"><span class="step-n">2</span> Build the timeline <span id="tl-sum" class="sum"></span></div>
+  <div class="stage-body">
+
+    <div id="empty" class="empty" hidden>
+      <p><b>Film this page in three moves</b></p>
+      <div class="checks">
+        <span><span id="e-fit" class="chip">1</span> Fit the window to your render size</span>
+        <span><span id="e-warm" class="chip">2</span> Warm up the page</span>
+        <span><span id="e-pick" class="chip">3</span> Pick your first keyframe</span>
+      </div>
+    </div>
+
+    <div id="ruler-wrap" hidden>
+      <div id="ruler" title="Drag to scrub"></div>
+      <div class="ruler-meta"><span id="time">0.0s</span><span id="total"></span></div>
+    </div>
+
+    <ol id="steps"></ol>
+
+    <div class="addrow">
+      <button id="pick" class="primary">＋ Keyframe</button>
+      <button id="arm-click" title="Arm click mode: the next element you click on the page is recorded as a click step, performed with real input during the render.">⊕ Click</button>
+      <button id="arm-hover" title="Arm hover mode: the next element you click on the page is recorded as a hover step, performed with real input during the render.">⊙ Hover</button>
+      <button id="add-hold" title="Add a pause at the current position.">◦ Hold</button>
+    </div>
+  </div>
 </section>
 
-<section class="toolbar">
-  <button id="pick" class="primary">＋ Pick element</button>
-  <button id="arm-click" title="Arm click mode: the next element you click on the page is recorded as a click step, performed with real input during the render.">＋ Click</button>
-  <button id="arm-hover" title="Arm hover mode: the next element you click on the page is recorded as a hover step, performed with real input during the render.">＋ Hover</button>
-  <button id="add-hold">＋ Hold</button>
-  <button id="prepare" title="Scroll through the whole page so lazy content loads and reveals fire — the state the renderer sees. Do this before picking.">⟳ Prepare page</button>
-</section>
-
-<ol id="steps"></ol>
-
-<section class="preview">
+<footer>
   <button id="play">▶ Preview</button>
-  <input id="scrub" type="range" min="0" max="1000" value="0" disabled>
-  <span id="time" class="muted">0.0s</span>
-</section>
-
-<section class="export">
+  <span class="spacer"></span>
   <select id="codec" title="Output codec for the copied render command — the command's --out extension selects it. h264 plays everywhere; ProRes 4444 is an editor-friendly master; png writes a lossless frame sequence into a directory.">
     <option value="h264">h264 (.mp4)</option>
     <option value="prores">ProRes (.mov)</option>
     <option value="png">PNG frames</option>
   </select>
-  <button id="export" class="primary">Export config</button>
-  <button id="copy">Copy JSON</button>
+  <button id="export" class="primary">Export</button>
   <button id="copy-cmd" title="Copy a self-contained render command — the config is embedded in it, no exported file needed. Paste into a terminal at the tapeworm repo.">Copy command</button>
-  <button id="clear" class="danger">Clear</button>
-</section>
+  <details id="more" class="menu">
+    <summary title="More">⋯</summary>
+    <div class="menu-items">
+      <button id="copy">Copy JSON</button>
+      <button id="clear" class="danger">Start over…</button>
+    </div>
+  </details>
+</footer>
 
 <script src="../shared/easing-core.js"></script>
 <script src="panel.js"></script>
