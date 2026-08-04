@@ -36,10 +36,12 @@ test('manifest stays review-friendly: minimal permissions, no host permissions, 
   for (const rel of [manifest.background.service_worker, manifest.side_panel.default_path]) {
     assert.ok(existsSync(new URL(`extension/${rel}`, root)), `${rel} missing`);
   }
-  // the background worker's on-demand injection list must point at real files
-  const bg = read('extension/background.js');
-  for (const m of bg.matchAll(/'((?:shared|content)\/[\w-]+\.js)'/g)) {
-    assert.ok(existsSync(new URL(`extension/${m[1]}`, root)), `${m[1]} injected but missing`);
+  // the panel's on-demand injection list must point at real files
+  const panel = read('extension/sidepanel/panel.js');
+  const injected = [...panel.matchAll(/'((?:shared|content)\/[\w-]+\.js)'/g)].map((m) => m[1]);
+  assert.ok(injected.length >= 5, 'expected the injection list in panel.js');
+  for (const rel of injected) {
+    assert.ok(existsSync(new URL(`extension/${rel}`, root)), `${rel} injected but missing`);
   }
 });
 

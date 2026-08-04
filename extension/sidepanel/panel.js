@@ -340,9 +340,30 @@ $('clear').addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------- boot
+const CONTENT_SCRIPTS = [
+  'shared/easing-core.js',
+  'shared/anchor-core.js',
+  'shared/selector.js',
+  'content/overlay.js',
+  'content/bridge.js',
+];
+
 (async function boot() {
-  const got = await chrome.storage.session.get('authoringTabId');
-  tabId = got.authoringTabId ?? null;
+  // The panel was opened by the action click, so activeTab covers this tab —
+  // inject the overlay from here (the service worker can't: sidePanel.open
+  // must be the first thing a gesture does, so the worker does nothing).
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  tabId = tab ? tab.id : null;
+  await chrome.storage.session.set({ authoringTabId: tabId });
+  if (tabId != null) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+      await chrome.storage.session.remove('injectError');
+    } catch (e) {
+      // chrome:// pages, the Web Store, PDFs — nothing we can do there.
+      await chrome.storage.session.set({ injectError: String((e && e.message) || e) });
+    }
+  }
   await loadState();
   for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
     $(id).value = String(state.settings[key]);
