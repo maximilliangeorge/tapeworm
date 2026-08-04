@@ -182,6 +182,18 @@ export type Config = {
      * load, send real wheel events until it is. Default on.
      */
     unlockIntro?: boolean | { maxTicks?: number; deltaY?: number };
+    /**
+     * Substitute assets during the render by intercepting their requests —
+     * swap the hero video for a different source file, say. `from` is a URL
+     * wildcard pattern (`*` matches any run of characters, `?` any single one)
+     * matched against the full request URL; `to` is the replacement: an
+     * https URL fetched in the original's place, or a local file path, served
+     * from disk with full Range-request support (which is what lets a
+     * substituted <video> seek). The page never sees the switch. Substituted
+     * videos must be seekable — mp4 with the moov atom up front
+     * (ffmpeg -movflags +faststart).
+     */
+    substitute?: Array<{ from: string; to: string }>;
   };
   /**
    * Render in N parallel browser processes. Frames are independent because every
@@ -232,6 +244,8 @@ export type Resolved = {
     waitForIntro: number;
     replayIntro: boolean;
     unlockIntro: { enabled: boolean; maxTicks: number; deltaY: number };
+    /** `to` is an http(s) URL, or an absolute local path verified to exist. */
+    substitute: Array<{ from: string; to: string }>;
   };
   jobs: number;
   chromePath: string | null;

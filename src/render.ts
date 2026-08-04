@@ -142,6 +142,8 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   const peak = peakStep(track, cfg.dpr);
   const metrics = await lead.session.eval<any>('window.__sr.metrics()').catch(() => null);
   const notes: string[] = [...lead.notes];
+  const subs = cfg.page.substitute.length;
+  if (subs > 0) notes.push(`substituting ${subs} URL pattern${subs === 1 ? '' : 's'}`);
   if (metrics) {
     notes.push(`document ${metrics.docHeight}px, ${metrics.videos} video${metrics.videos === 1 ? '' : 's'}, ${metrics.animations} animation${metrics.animations === 1 ? '' : 's'}`);
   }

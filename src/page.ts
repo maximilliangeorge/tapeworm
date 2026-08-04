@@ -3,9 +3,44 @@
 import type { Connection, Session } from './cdp.ts';
 import { newPage } from './cdp.ts';
 import { runtimeSource } from './runtime.ts';
+import { fulfillFromFile, isUrl, wildcardToRegExp } from './substitute.ts';
 import type { Resolved } from './types.ts';
 
 export type OpenResult = { session: Session; notes: string[] };
+
+/**
+ * Asset substitution via the Fetch domain — what DevTools "local overrides"
+ * uses. A remote replacement is a continueRequest with a rewritten URL: Chrome
+ * re-issues the request (Range headers intact, which video seeking needs) and
+ * the page can't observe the switch. A local file is a fulfillRequest served
+ * from disk — a URL rewrite can't work there, because Chrome refuses the
+ * secure→insecure downgrade any https page → local http server rewrite would
+ * be. Fetch.enable is per-session and survives navigation, so the prewarm
+ * sweep, 'cache'-mode reloads, and navigating clicks all stay covered.
+ * Substitution is a pure function of the URL — no wall-clock or frame-order
+ * dependence — so it doesn't break sharding.
+ */
+async function enableSubstitution(session: Session, subs: Resolved['page']['substitute']): Promise<void> {
+  const rules = subs.map((s) => ({ re: wildcardToRegExp(s.from), to: s.to, local: !isUrl(s.to) }));
+  session.on('Fetch.requestPaused', (p: { requestId: string; request: { url: string; headers: Record<string, string> } }) => {
+    // fire-and-forget throughout: awaiting would serialise paused requests behind us
+    const send = (method: string, params: object) => session.send(method, params).catch(() => {});
+    const hit = rules.find((r) => r.re.test(p.request.url));
+    if (!hit) {
+      send('Fetch.continueRequest', { requestId: p.requestId });
+    } else if (!hit.local) {
+      send('Fetch.continueRequest', { requestId: p.requestId, url: hit.to });
+    } else {
+      const range = Object.entries(p.request.headers).find(([k]) => k.toLowerCase() === 'range')?.[1];
+      fulfillFromFile(hit.to, range).then(
+        (f) => send('Fetch.fulfillRequest', { requestId: p.requestId, ...f }),
+        // unreadable file (deleted since config time?) — let the real asset through
+        () => send('Fetch.continueRequest', { requestId: p.requestId }),
+      );
+    }
+  });
+  await session.send('Fetch.enable', { patterns: subs.map((s) => ({ urlPattern: s.from })) });
+}
 
 export async function openPage(conn: Connection, cfg: Resolved): Promise<OpenResult> {
   const session = await newPage(conn);
@@ -14,6 +49,7 @@ export async function openPage(conn: Connection, cfg: Resolved): Promise<OpenRes
   await session.send('Page.enable');
   await session.send('Runtime.enable');
   await session.send('Page.setLifecycleEventsEnabled', { enabled: true });
+  if (cfg.page.substitute.length > 0) await enableSubstitution(session, cfg.page.substitute);
 
   // deviceScaleFactor here (rather than --force-device-scale-factor) is fine because
   // Page.captureScreenshot honours the emulation override; startScreencast does not.

@@ -9,6 +9,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `page.substitute` — replace assets during the render by intercepting their
+  requests (CDP Fetch domain, the mechanism behind DevTools "local overrides"):
+  `{ "from": "<url wildcard>", "to": "<url or local file>" }`. Local files are
+  served straight from disk with HTTP Range support, so a substituted
+  `<video>` still seeks per frame. Applies identically across pre-warm,
+  reloads, navigating clicks, authoring (`tapeworm author`), and all shards.
+
 - `"ease": "natural"` — a flick-scroll easing modelled on momentum physics: a
   brief ramp to peak velocity, then exponential friction decay. Its shape
   derives from the scroll distance — longer scrolls get a quicker attack and a

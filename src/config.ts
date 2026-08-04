@@ -1,6 +1,6 @@
 /** Config parsing, defaults, and validation with useful error messages. */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { extname, resolve as resolvePath } from 'node:path';
 import type { Config, Resolved, Segment, Step, TimelineEntry } from './types.ts';
@@ -100,6 +100,36 @@ export function normaliseTimeline(entries: TimelineEntry[]): Step[] {
   return steps;
 }
 
+/**
+ * Local replacements are checked at config time, not when the first request
+ * matches mid-render — a typo'd path should fail in seconds, not minutes.
+ */
+function resolveSubstitute(subs: Array<{ from: string; to: string }> | undefined, pageUrl: string): Resolved['page']['substitute'] {
+  if (subs === undefined) return [];
+  if (!Array.isArray(subs)) throw new Error('"page.substitute" must be an array of { from, to }');
+  return subs.map((s, i) => {
+    if (!s || typeof s !== 'object' || typeof s.from !== 'string' || s.from === '' || typeof s.to !== 'string' || s.to === '') {
+      throw new Error(`page.substitute[${i}] must be { from: "url pattern", to: "url or file path" }`);
+    }
+    if (/^https?:\/\//.test(s.to)) {
+      // Chrome refuses to rewrite a request from a secure page to an insecure
+      // URL (net::ERR_BLOCKED_BY_CLIENT) — that would surface as the asset
+      // silently failing to load mid-render. Fail here instead.
+      if (pageUrl.startsWith('https:') && s.to.startsWith('http:')) {
+        throw new Error(
+          `page.substitute[${i}]: an https page can't be given an http:// replacement (${s.to}) — ` +
+            `Chrome blocks the downgrade. Use an https URL, or a local file.`,
+        );
+      }
+      return { from: s.from, to: s.to };
+    }
+    const path = resolvePath(s.to);
+    if (!existsSync(path)) throw new Error(`page.substitute[${i}]: replacement file not found: ${path}`);
+    if (statSync(path).isDirectory()) throw new Error(`page.substitute[${i}]: replacement is a directory: ${path}`);
+    return { from: s.from, to: path };
+  });
+}
+
 export function resolveConfig(input: Config): Resolved {
   if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
     throw new Error('"timeline" must be an array');
@@ -193,6 +223,7 @@ export function resolveConfig(input: Config): Resolved {
         maxTicks: (typeof input.page?.unlockIntro === 'object' ? input.page.unlockIntro.maxTicks : undefined) ?? 40,
         deltaY: (typeof input.page?.unlockIntro === 'object' ? input.page.unlockIntro.deltaY : undefined) ?? 400,
       },
+      substitute: resolveSubstitute(input.page?.substitute, url),
     },
     // 'cache' and 'none' film reveals as they happen, and reveal state depends on the
     // path taken to get there — a shard that jumps straight to frame 400 would show

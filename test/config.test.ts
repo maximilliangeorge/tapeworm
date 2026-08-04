@@ -185,6 +185,38 @@ test('anchors carry fallbackText through normalisation', () => {
   assert.ok(move.type === 'move' && typeof move.to === 'object' && move.to.fallbackText === 'Pricing');
 });
 
+test('page.substitute: validated and resolved; local files must exist at config time', () => {
+  assert.equal(resolveConfig(BASE).page.substitute.length, 0);
+
+  const sub = (substitute: unknown) =>
+    resolveConfig({ ...BASE, page: { substitute } } as unknown as Config);
+
+  assert.throws(() => sub('nope'), /must be an array/);
+  assert.throws(() => sub([{ from: '*/hero.mp4' }]), /page\.substitute\[0\] must be/);
+  assert.throws(() => sub([{ from: '', to: 'https://example.com/a.mp4' }]), /page\.substitute\[0\] must be/);
+  assert.throws(() => sub([{ from: '*/hero.mp4', to: './no-such-file.mp4' }]), /replacement file not found/);
+  assert.throws(
+    () => sub([{ from: '*/hero.mp4', to: 'http://cdn.example.com/a.mp4' }]),
+    /can't be given an http:\/\/ replacement/,
+  );
+
+  // A remote replacement passes through untouched; a local one resolves absolute.
+  const dir = mkdtempSync(join(tmpdir(), 'tapeworm-test-'));
+  try {
+    const file = join(dir, 'other.mp4');
+    writeFileSync(file, 'x');
+    const r = sub([
+      { from: '*/hero.mp4', to: 'https://example.com/other.mp4' },
+      { from: '*/promo.webm', to: file },
+    ]);
+    assert.deepEqual(r.page.substitute[0], { from: '*/hero.mp4', to: 'https://example.com/other.mp4' });
+    assert.equal(r.page.substitute[1].to, file);
+    assert.throws(() => sub([{ from: '*', to: dir }]), /replacement is a directory/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('parseConfig parses raw text (the stdin path) with the same tolerances as loadConfig', () => {
   const cfg = parseConfig(`{
     // pasted from the extension's Copy command heredoc

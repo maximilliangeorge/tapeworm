@@ -151,6 +151,23 @@ This is the part most tools get wrong. Every `<video>` is paused, seeked to the 
 
 **Won't work, no workaround:** DRM/EME content (captures black), cross-origin embeds like YouTube and Vimeo (the inner `<video>` is unreachable and adaptive anyway), live streams. Use `"freeze"` and composite separately.
 
+### Substituting assets
+
+`page.substitute` swaps assets at the network layer during the render — most usefully, a page's video for a different source file:
+
+```json
+"page": {
+  "substitute": [
+    { "from": "*/hero.mp4", "to": "./assets/hero-4k.mp4" },
+    { "from": "https://cdn.example.com/promo-*.webm", "to": "https://example.com/replacement.webm" }
+  ]
+}
+```
+
+`from` is a URL wildcard (`*` matches any run of characters, `?` a single one) matched against the full request URL — note that's anchored, so end with `*` if the URL carries a query string. `to` is either an https URL or a local file path (relative to the working directory, checked at config time). It works the way DevTools "local overrides" does, invisibly to the page: a remote replacement is fetched in the original request's place, and a local file is served straight from disk at the interception layer, with full HTTP Range support — so a substituted video still seeks per frame. The interception survives navigation, applies during pre-warm and `cache`-mode reloads, and is a pure function of the URL, so it doesn't affect sharding.
+
+Caveats: the replacement video must itself be seekable (mp4 with the `moov` atom up front — `ffmpeg -movflags +faststart`); a shorter replacement freezes on its last frame once the timeline seeks past its end, and a different aspect ratio letterboxes per the page's `object-fit`; a remote replacement must be `https` when the page is (Chrome refuses the downgrade — the config says so upfront); and `blob:` sources (MSE players — HLS/DASH) can't be swapped by URL, since the media element's URL isn't the network request.
+
 ---
 
 ## Intro animations and preloaders
