@@ -348,11 +348,10 @@ const CONTENT_SCRIPTS = [
 ];
 
 /**
- * Inject the overlay into the current active tab. The panel was opened by the
- * action click, so activeTab covers that tab (the service worker can't do this:
- * sidePanel.open must be the FIRST thing a gesture does, so the worker does
- * nothing). Re-runnable via the "Attach to current tab" button — the common
- * failure is clicking the action while parked on chrome://extensions.
+ * Fallback injection from the panel — the primary injection happens in the
+ * service worker on action click, where the activeTab grant is certain.
+ * This exists for the "Attach to current tab" button; it works whenever a
+ * grant for that tab is live, and explains itself when one isn't.
  */
 async function attach() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -402,6 +401,27 @@ $('reattach').addEventListener('click', async () => {
 });
 
 (async function boot() {
-  await attach();
+  // The worker injects on the same click that opened this panel — wait for the
+  // overlay to answer rather than racing it with a second injection.
+  const got = await chrome.storage.session.get('authoringTabId');
+  tabId = got.authoringTabId ?? null;
+  let up = false;
+  for (let i = 0; i < 10 && !up; i++) {
+    if (await send('info')) up = true;
+    else await new Promise((r) => setTimeout(r, 150));
+  }
+  if (!up) {
+    const { injectError } = await chrome.storage.session.get('injectError');
+    if (injectError) {
+      $('inject-msg').textContent =
+        'Couldn\'t attach to this page: ' + injectError + ' — extension pages (chrome://), ' +
+        'the Web Store, and PDFs can\'t be authored, and file:// pages need ' +
+        '"Allow access to file URLs" enabled in chrome://extensions. Switch to the page ' +
+        'you want to film and click the tapeworm toolbar icon there.';
+      $('inject-note').hidden = false;
+    } else {
+      await attach(); // no worker error recorded — likely a stale panel; try directly
+    }
+  }
   await syncPage();
 })();
