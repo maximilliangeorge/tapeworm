@@ -260,6 +260,27 @@ Default is `min(4, cores-1)`. Each shard renders a contiguous range into its own
 
 ---
 
+## Authoring timelines visually
+
+Hand-writing selectors and guessing holds works, but there are two faster ways to build a timeline.
+
+**`tapeworm author <url>`** opens a headful Chrome with the render's exact flags, emulated viewport, and injected runtime, pre-warms the page the same way a render would, and overlays an element picker. Click elements to add keyframes — each shows its generated selector and an honesty grade (`id` / `data` / `class` / `structural`, the last meaning "works today, breaks on a redesign"). Terminal keys: `p` toggles the picker, `u` undoes the last pick, `w` writes the config, `q` quits (also writes). `--out config.json` names the file; otherwise the JSON goes to stdout.
+
+Because author mode *is* the render environment, it's also the tiebreaker: if the browser extension and a render ever disagree about where an anchor lands, what author mode shows is what the render will do.
+
+**The Chrome extension** (in `extension/`, load unpacked via `chrome://extensions`) authors in your everyday browser: click the toolbar action, pick elements on the page, edit timing/easing/holds in the side panel, preview the motion in real time, export the config. Two honesty features matter:
+
+- The **camera frame** overlay shows the configured render viewport; if your window is smaller, it scales down and says so ("framing shown at 78%") rather than silently misrepresenting the framing.
+- **Prepare page** steps through the whole page the way the renderer's pre-warm does, so lazy content loads and scroll reveals fire *before* you pick. Skipping it means anchors resolve against un-fired reveal transforms — positions the render will never see. Do it first.
+
+The extension can't send trusted input, so a scroll-gated intro (see above) has to be scrolled through by hand once — the overlay tells you when that's the case. The renderer still unlocks it automatically at capture time.
+
+Exported configs carry a `meta` block (`authoredWith`, `authoredAt`, `authoredViewport`, `url`) that the renderer ignores but keeps for diagnosing authoring/render drift.
+
+The extension ships `src/shared/*.js` verbatim (selector generation, anchor resolution, easing) — `npm run sync-shared` copies them, and a test fails if the copies drift. That shared core is why the picker, the preview, and the render agree.
+
+---
+
 ## When it goes wrong
 
 **"page moved the scroll offset"** — something is fighting the scroll. Usual suspects, in order: `scroll-snap-type` (Chrome re-snaps after programmatic scrolls), a smooth-scroll library that wasn't detected, or `content-visibility: auto` changing the document height as you scroll. Try `"page": { "css": "* { scroll-snap-type: none !important }" }`. The render continues and reports the affected frames rather than aborting.

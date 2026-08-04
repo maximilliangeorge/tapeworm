@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>tapeworm</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header>
+  <h1>tapeworm</h1>
+  <span id="page-title" class="muted"></span>
+</header>
+
+<div id="gate-note" class="note" hidden>
+  This page gates scrolling behind an intro. Scroll down manually in the page to
+  unlock it, then add keyframes. The renderer unlocks it automatically at capture time.
+</div>
+<div id="inject-note" class="note" hidden>
+  Couldn't attach to this page. Extension pages, the Web Store, and PDFs can't be authored.
+</div>
+
+<section class="settings">
+  <label>Width <input id="s-width" type="number" value="1280" min="320" step="1"></label>
+  <label>Height <input id="s-height" type="number" value="800" min="320" step="1"></label>
+  <label>DPR
+    <select id="s-dpr"><option>1</option><option selected>2</option><option>3</option></select>
+  </label>
+  <label>FPS <input id="s-fps" type="number" value="60" min="1" max="240"></label>
+</section>
+
+<section class="toolbar">
+  <button id="pick" class="primary">＋ Pick element</button>
+  <button id="add-hold">＋ Hold</button>
+  <button id="prepare" title="Scroll through the whole page so lazy content loads and reveals fire — the state the renderer sees. Do this before picking.">⟳ Prepare page</button>
+</section>
+
+<ol id="steps"></ol>
+
+<section class="preview">
+  <button id="play">▶ Preview</button>
+  <input id="scrub" type="range" min="0" max="1000" value="0" disabled>
+  <span id="time" class="muted">0.0s</span>
+</section>
+
+<section class="export">
+  <button id="export" class="primary">Export config</button>
+  <button id="copy">Copy JSON</button>
+  <button id="clear" class="danger">Clear</button>
+</section>
+
+<script src="../shared/easing-core.js"></script>
+<script src="panel.js"></script>
+</body>
+</html>

@@ -19,6 +19,10 @@ const HELP = `tapeworm — record a website scrollthrough as video
 USAGE
   tapeworm <config.json> [options]
   tapeworm <url> [options]              # auto-discovers sections
+  tapeworm author <url|config.json> [--out config.json]
+                                        # visual authoring: headful Chrome with the
+                                        # render's exact viewport + runtime; click
+                                        # elements to build a timeline, export JSON
 
 OPTIONS
   -o, --out <path>       output file; extension picks the codec
@@ -120,7 +124,9 @@ async function main(): Promise<void> {
     process.exit(positional.length === 0 && !flags.help && !flags.h ? 1 : 0);
   }
 
-  const target = positional[0];
+  const authorMode = positional[0] === 'author';
+  const target = positional[authorMode ? 1 : 0];
+  if (authorMode && !target) fail('author needs a URL or config file: tapeworm author <url>');
   let config: Config;
   if (looksLikeUrl(target)) {
     config = { url: target, auto: true };
@@ -198,10 +204,32 @@ async function main(): Promise<void> {
   let cfg;
   try { cfg = resolveConfig(config); } catch (e) { fail((e as Error).message); }
 
-  if (cfg.codec !== 'png') await checkFfmpeg().catch((e) => fail((e as Error).message));
-
   let chrome: string;
   try { chrome = findChrome(cfg.chromePath); } catch (e) { fail((e as Error).message); }
+
+  if (authorMode) {
+    const { author } = await import('../src/author.ts');
+    const configOut = str(flags, 'out', 'o') ?? null;
+    process.stdout.write(`\n  authoring ${cfg.url}\n  ${cfg.width}×${cfg.height} @${cfg.dpr}x, ${cfg.fps}fps — the render's exact viewport\n\n`);
+    try {
+      await author(cfg, chrome, configOut, {
+        onNote: (n) => process.stdout.write(`  · ${n}\n`),
+        onPicked: (step, ev) => {
+          if (step.type !== 'move' || typeof step.to !== 'object') return;
+          const q = ev.quality === 'structural' ? 'structural — fragile' : ev.quality;
+          process.stdout.write(
+            `  + move to ${step.to.selector}${step.to.nth ? ` [${step.to.nth}]` : ''} (${q}` +
+              `${ev.resolvedY != null ? `, y=${Math.round(ev.resolvedY)}` : ''})\n`,
+          );
+        },
+      });
+    } catch (e) {
+      fail((e as Error).message);
+    }
+    process.exit(0);
+  }
+
+  if (cfg.codec !== 'png') await checkFfmpeg().catch((e) => fail((e as Error).message));
 
   const rel = (p: string) => {
     const r = relative(process.cwd(), p);

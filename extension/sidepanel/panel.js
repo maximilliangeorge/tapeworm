@@ -1,0 +1,294 @@
+/**
+ * The side-panel editor. Owns the timeline being authored; the content-script
+ * overlay owns the page. All state lives here + chrome.storage.session (MV3
+ * service workers get evicted, so nothing may live in the background worker).
+ */
+'use strict';
+
+const EASES = ['linear', ...Object.keys(globalThis.TapewormEasing.NAMED)];
+const $ = (id) => document.getElementById(id);
+
+let tabId = null;
+let state = {
+  url: '',
+  title: '',
+  settings: { width: 1280, height: 800, dpr: 2, fps: 60 },
+  steps: [{ type: 'start', at: 'top', hold: 0.8 }],
+};
+let totalSec = 0;
+let playing = false;
+let picking = false;
+
+// ---------------------------------------------------------------- messaging
+async function send(type, data) {
+  if (tabId == null) return null;
+  try {
+    return await chrome.tabs.sendMessage(tabId, { to: 'tapeworm-overlay', type, data });
+  } catch (e) {
+    return null; // page navigated / not injected — surfaced via inject-note
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.from !== 'tapeworm-overlay') return;
+  const d = msg.data || {};
+  if (msg.type === 'picker:picked') onPicked(d);
+  if (msg.type === 'picker:stopped') setPicking(false);
+  if (msg.type === 'preview:time') onPreviewTime(d);
+  if (msg.type === 'preview:ended') { playing = false; $('play').textContent = '▶ Preview'; }
+  if (msg.type === 'page:info') onPageInfo(d);
+});
+
+// ---------------------------------------------------------------- state
+async function saveState() {
+  await chrome.storage.session.set({ ['doc:' + tabId]: state });
+}
+
+async function loadState() {
+  const got = await chrome.storage.session.get(['doc:' + tabId, 'injectError']);
+  if (got['doc:' + tabId]) state = got['doc:' + tabId];
+  $('inject-note').hidden = !got.injectError;
+}
+
+function stripInternal(step) {
+  const out = {};
+  for (const k of Object.keys(step)) if (!k.startsWith('_') && step[k] !== undefined) out[k] = step[k];
+  return out;
+}
+
+// ---------------------------------------------------------------- events from the page
+function onPicked(d) {
+  const step = { type: 'move', to: d.anchor, ease: 'inOutCubic', _quality: d.quality };
+  state.steps.push(step);
+  saveState();
+  renderSteps();
+  refreshDuration();
+}
+
+function onPageInfo(d) {
+  state.url = d.url || state.url;
+  state.title = d.title || state.title;
+  $('page-title').textContent = state.title || state.url;
+  $('gate-note').hidden = !d.scrollGated;
+  saveState();
+}
+
+function onPreviewTime(d) {
+  totalSec = d.total;
+  $('scrub').value = String(Math.round((d.t / d.total) * 1000));
+  $('time').textContent = d.t.toFixed(1) + 's / ' + d.total.toFixed(1) + 's';
+}
+
+// ---------------------------------------------------------------- steps UI
+function anchorLabel(a) {
+  if (typeof a === 'string') return a;
+  if (typeof a === 'number') return a + 'px';
+  return a.selector + (a.nth ? ' [' + a.nth + ']' : '');
+}
+
+function renderSteps() {
+  const ol = $('steps');
+  ol.innerHTML = '';
+  state.steps.forEach((step, i) => {
+    const li = document.createElement('li');
+    li.className = 'step';
+    if (step.type === 'start') {
+      li.append(row(
+        span('sel', 'start at ' + anchorLabel(step.at)),
+        field('hold s', numInput(step.hold, 0.8, (v) => { step.hold = v; commit(); })),
+      ));
+    } else if (step.type === 'hold') {
+      li.append(row(
+        span('sel', 'hold'),
+        field('seconds', numInput(step.seconds, 1, (v) => { step.seconds = v == null ? 1 : v; commit(); })),
+        icons(i),
+      ));
+    } else if (step.type === 'move') {
+      const sel = span('sel', anchorLabel(step.to));
+      sel.title = 'Jump the page to this anchor';
+      sel.addEventListener('click', () => send('jump', { anchor: step.to }));
+      const badges = [];
+      if (step._quality) badges.push(badge(step._quality));
+      if (typeof step.to === 'object' && step.to.fallbackText) sel.title += '\n"' + step.to.fallbackText + '"';
+      li.append(row(sel, ...badges, icons(i)));
+      const align = selectInput(['top', 'center', 'bottom'], (typeof step.to === 'object' && step.to.align) || 'top', (v) => {
+        if (typeof step.to === 'object') { if (v === 'top') delete step.to.align; else step.to.align = v; commit(); }
+      });
+      const offset = numInput(typeof step.to === 'object' ? step.to.offset : undefined, 0, (v) => {
+        if (typeof step.to === 'object') { if (v == null || v === 0) delete step.to.offset; else step.to.offset = v; commit(); }
+      });
+      li.append(row(
+        field('align', align),
+        field('offset px', offset),
+        field('duration s (auto)', numInput(step.duration, '', (v) => { step.duration = v == null ? undefined : v; commit(); })),
+        field('ease', selectInput(EASES, step.ease || 'inOutCubic', (v) => { step.ease = v; commit(); })),
+        field('hold s', numInput(step.hold, '', (v) => { step.hold = v == null ? undefined : v; commit(); })),
+      ));
+    } else {
+      li.append(row(span('sel', step.type + ' (not executable yet)'), badge('warn'), icons(i)));
+    }
+    ol.appendChild(li);
+  });
+
+  function row(...kids) { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); return d; }
+  function span(cls, text) { const s = document.createElement('span'); s.className = cls; s.textContent = text; return s; }
+  function badge(q) { const b = document.createElement('span'); b.className = 'badge ' + q; b.textContent = q === 'structural' ? 'fragile' : q; return b; }
+  function field(label, input) {
+    const w = document.createElement('label'); w.className = 'field';
+    const t = document.createElement('span'); t.textContent = label;
+    w.append(t, input); return w;
+  }
+  function numInput(value, placeholder, onChange) {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.step = '0.1'; inp.className = 'num';
+    inp.placeholder = String(placeholder);
+    if (value !== undefined && value !== null) inp.value = String(value);
+    inp.addEventListener('change', () => onChange(inp.value === '' ? null : Number(inp.value)));
+    return inp;
+  }
+  function selectInput(options, value, onChange) {
+    const s = document.createElement('select');
+    for (const o of options) { const opt = document.createElement('option'); opt.textContent = o; s.append(opt); }
+    s.value = value;
+    s.addEventListener('change', () => onChange(s.value));
+    return s;
+  }
+  function icons(i) {
+    const wrap = document.createElement('span');
+    wrap.style.marginLeft = 'auto';
+    wrap.append(
+      iconBtn('↑', 'Move up', () => { if (i > 1) { swap(i, i - 1); } }),
+      iconBtn('↓', 'Move down', () => { if (i < state.steps.length - 1) { swap(i, i + 1); } }),
+      iconBtn('✕', 'Remove', () => { state.steps.splice(i, 1); commit(); }),
+    );
+    return wrap;
+  }
+  function iconBtn(txt, title, fn) {
+    const b = document.createElement('button');
+    b.className = 'icon'; b.textContent = txt; b.title = title;
+    b.addEventListener('click', fn);
+    return b;
+  }
+  function swap(a, b) { const t = state.steps[a]; state.steps[a] = state.steps[b]; state.steps[b] = t; commit(); }
+}
+
+function commit() {
+  saveState();
+  renderSteps();
+  refreshDuration();
+}
+
+async function refreshDuration() {
+  const r = await send('duration', { steps: state.steps.map(stripInternal) });
+  if (r && typeof r.total === 'number') {
+    totalSec = r.total;
+    $('time').textContent = '0.0s / ' + r.total.toFixed(1) + 's';
+    $('scrub').disabled = state.steps.length < 2;
+  }
+}
+
+// ---------------------------------------------------------------- toolbar
+function setPicking(on) {
+  picking = on;
+  $('pick').classList.toggle('active', on);
+  $('pick').textContent = on ? '✕ Stop picking (Esc)' : '＋ Pick element';
+}
+
+$('pick').addEventListener('click', async () => {
+  setPicking(!picking);
+  await send(picking ? 'picker:start' : 'picker:stop');
+});
+
+$('prepare').addEventListener('click', async () => {
+  $('prepare').disabled = true;
+  $('prepare').textContent = '⟳ Preparing…';
+  await send('prepare');
+  $('prepare').disabled = false;
+  $('prepare').textContent = '⟳ Prepare page';
+});
+
+$('add-hold').addEventListener('click', () => {
+  state.steps.push({ type: 'hold', seconds: 1 });
+  commit();
+});
+
+$('play').addEventListener('click', async () => {
+  if (playing) {
+    playing = false;
+    $('play').textContent = '▶ Preview';
+    await send('preview:stop');
+    return;
+  }
+  const r = await send('preview:play', { steps: state.steps.map(stripInternal) });
+  if (r) { playing = true; $('play').textContent = '■ Stop'; }
+});
+
+$('scrub').addEventListener('input', async () => {
+  if (playing) { playing = false; $('play').textContent = '▶ Preview'; }
+  const t = (Number($('scrub').value) / 1000) * totalSec;
+  const r = await send('preview:seek', { steps: state.steps.map(stripInternal), t });
+  if (r) $('time').textContent = r.t.toFixed(1) + 's / ' + r.total.toFixed(1) + 's';
+});
+
+for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
+  $(id).addEventListener('change', async () => {
+    state.settings[key] = Number($(id).value);
+    await saveState();
+    await send('settings', state.settings);
+  });
+}
+
+// ---------------------------------------------------------------- export
+async function buildConfig() {
+  const info = await send('info');
+  const url = (info && info.url) || state.url;
+  return {
+    url,
+    viewport: { width: state.settings.width, height: state.settings.height, dpr: state.settings.dpr },
+    fps: state.settings.fps,
+    timeline: state.steps.map(stripInternal),
+    meta: {
+      authoredWith: 'tapeworm-extension/0.1.0',
+      authoredAt: new Date().toISOString(),
+      authoredViewport: info ? info.window : null,
+      url,
+    },
+  };
+}
+
+$('export').addEventListener('click', async () => {
+  const cfg = await buildConfig();
+  const blob = new Blob([JSON.stringify(cfg, null, 2) + '\n'], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (new URL(cfg.url).hostname || 'tapeworm') + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$('copy').addEventListener('click', async () => {
+  const cfg = await buildConfig();
+  await navigator.clipboard.writeText(JSON.stringify(cfg, null, 2) + '\n');
+  $('copy').textContent = 'Copied ✓';
+  setTimeout(() => { $('copy').textContent = 'Copy JSON'; }, 1200);
+});
+
+$('clear').addEventListener('click', () => {
+  state.steps = [{ type: 'start', at: 'top', hold: 0.8 }];
+  commit();
+});
+
+// ---------------------------------------------------------------- boot
+(async function boot() {
+  const got = await chrome.storage.session.get('authoringTabId');
+  tabId = got.authoringTabId ?? null;
+  await loadState();
+  for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
+    $(id).value = String(state.settings[key]);
+  }
+  renderSteps();
+  const info = await send('info');
+  if (info) onPageInfo(info);
+  await send('settings', state.settings);
+  refreshDuration();
+})();

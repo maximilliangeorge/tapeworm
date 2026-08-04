@@ -12,6 +12,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test 'test/*.test.ts'",
+    "sync-shared": "node scripts/sync-shared.mjs",
     "tapeworm": "node bin/tapeworm.ts"
   },
   "files": [

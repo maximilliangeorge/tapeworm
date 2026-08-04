@@ -179,6 +179,12 @@ export type Config = {
   jobs?: number;
   /** Path to a Chrome / chrome-headless-shell binary. Default: auto-detect. */
   chromePath?: string;
+  /**
+   * Provenance stamped by authoring tools (authoredWith, authoredAt,
+   * authoredViewport, url). Ignored by the renderer; kept for diagnosing drift
+   * between the authoring environment and the render.
+   */
+  meta?: Record<string, unknown>;
   /** Show the browser window. Useful for debugging a page that fights you. */
   headful?: boolean;
 };

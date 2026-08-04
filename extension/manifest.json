@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "tapeworm author",
+  "version": "0.1.0",
+  "description": "Author tapeworm scrollthrough timelines visually: pick keyframes, set timing and easing, preview the motion, export the config.",
+  "minimum_chrome_version": "114",
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Author a tapeworm timeline on this page" },
+  "side_panel": { "default_path": "sidepanel/panel.html" }
+}

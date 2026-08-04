@@ -9,6 +9,17 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `tapeworm author <url>` — visual authoring in a headful Chrome that IS the
+  render environment (same flags, emulated viewport, injected runtime, pre-warm).
+  Click elements to build a timeline; export with `--out config.json`.
+- A Chrome extension (`extension/`, load unpacked) for authoring in an ordinary
+  browser: element picker with selector quality grades, camera-frame overlay
+  showing the true render framing, real-time preview and scrubbing, a
+  "prepare page" sweep that mirrors the renderer's pre-warm, and JSON export.
+  MV3 with `activeTab`/`scripting`/`storage`/`sidePanel` only.
+- Exported configs carry a `meta` provenance block (`authoredWith`,
+  `authoredAt`, `authoredViewport`, `url`); the renderer ignores it.
+
 - Timeline format v2: `timeline` entries may now be typed steps (`start`,
   `move`, `hold`) as well as the existing segment form, mixed freely. Legacy
   configs are normalised internally and behave identically. Interaction steps
