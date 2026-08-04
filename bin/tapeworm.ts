@@ -6,10 +6,10 @@
  *   tapeworm https://example.com --out demo.mp4
  */
 
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { relative } from 'node:path';
 import { findChrome, isHeadlessShell } from '../src/browser.ts';
-import { loadConfig, resolveConfig } from '../src/config.ts';
+import { loadConfig, parseConfig, resolveConfig } from '../src/config.ts';
 import { checkFfmpeg } from '../src/encode.ts';
 import { render } from '../src/render.ts';
 import type { Config, VideoMode } from '../src/types.ts';
@@ -19,6 +19,7 @@ const HELP = `tapeworm — record a website scrollthrough as video
 USAGE
   tapeworm <config.json> [options]
   tapeworm <url> [options]              # auto-discovers sections
+  tapeworm - [options]                  # read the config from stdin
   tapeworm author <url|config.json> [--out config.json]
                                         # visual authoring: headful Chrome with the
                                         # render's exact viewport + runtime; click
@@ -72,7 +73,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (!a.startsWith('-')) { positional.push(a); continue; }
+    if (!a.startsWith('-') || a === '-') { positional.push(a); continue; }
     const name = a.replace(/^--?/, '');
     if (name.includes('=')) {
       const [k, v] = name.split(/=(.*)/s);
@@ -130,6 +131,13 @@ async function main(): Promise<void> {
   let config: Config;
   if (looksLikeUrl(target)) {
     config = { url: target, auto: true };
+  } else if (target === '-') {
+    // config on stdin — what the extension's "Copy command" heredoc uses
+    if (authorMode) fail('author mode needs its stdin for keyboard control; pass a file or URL instead of -');
+    let raw = '';
+    try { raw = readFileSync(0, 'utf8'); } catch { raw = ''; }
+    if (!raw.trim()) fail('expected a config on stdin (tapeworm - < config.json)');
+    config = parseConfig(raw, 'stdin');
   } else {
     let isFile = false;
     try { isFile = statSync(target).isFile(); } catch { isFile = false; }

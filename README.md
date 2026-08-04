@@ -235,6 +235,7 @@ Default is `min(4, cores-1)`. Each shard renders a contiguous range into its own
 ## CLI
 
 ```
+tapeworm <config.json> | <url> | -     # - reads the config from stdin
 -o, --out <path>       output file; extension picks the codec
     --fps <n>          default 60
     --width <px>       CSS pixels, default 1280

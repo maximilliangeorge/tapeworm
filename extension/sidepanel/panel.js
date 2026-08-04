@@ -331,11 +331,15 @@ $('export').addEventListener('click', async () => {
 });
 
 $('copy-cmd').addEventListener('click', async () => {
-  const info = await send('info');
-  const base = exportBasename((info && info.url) || state.url);
-  // node bin/…, not npx: the package isn't published, so this is the command
-  // that actually works today (run from a tapeworm checkout).
-  const cmd = `node bin/tapeworm.ts ~/Downloads/${base}.json --out ${base}.mp4`;
+  const cfg = await buildConfig();
+  const base = exportBasename(cfg.url);
+  // Self-contained: the config rides along on stdin via a heredoc, so nothing
+  // needs to exist on disk. The quoted delimiter keeps the shell's hands off
+  // the JSON. node bin/…, not npx: the package isn't published yet.
+  const cmd =
+    `node bin/tapeworm.ts - --out ${base}.mp4 <<'TAPEWORM'\n` +
+    JSON.stringify(cfg, null, 2) +
+    `\nTAPEWORM`;
   await navigator.clipboard.writeText(cmd);
   $('copy-cmd').textContent = 'Copied ✓';
   setTimeout(() => { $('copy-cmd').textContent = 'Copy command'; }, 1200);

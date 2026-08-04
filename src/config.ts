@@ -12,13 +12,7 @@ const CODEC_BY_EXT: Record<string, 'h264' | 'prores' | 'png'> = {
   '.png': 'png',
 };
 
-export function loadConfig(path: string): Config {
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch {
-    throw new Error(`cannot read config: ${path}`);
-  }
+export function parseConfig(raw: string, label = 'config'): Config {
   try {
     // tolerate // comments and trailing commas — these are hand-edited files
     const stripped = raw
@@ -26,8 +20,18 @@ export function loadConfig(path: string): Config {
       .replace(/,(\s*[}\]])/g, '$1');
     return JSON.parse(stripped) as Config;
   } catch (e) {
-    throw new Error(`config is not valid JSON (${path}): ${(e as Error).message}`);
+    throw new Error(`config is not valid JSON (${label}): ${(e as Error).message}`);
   }
+}
+
+export function loadConfig(path: string): Config {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    throw new Error(`cannot read config: ${path}`);
+  }
+  return parseConfig(raw, path);
 }
 
 const STEP_TYPES = ['start', 'move', 'hold', 'click', 'hover', 'wait'] as const;

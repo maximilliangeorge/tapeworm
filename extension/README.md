@@ -29,7 +29,10 @@ config the renderer runs unchanged.
    reorder; click a keyframe's selector to jump the page to it.
 6. **▶ Preview** plays the timeline in real time with the same easing math the
    renderer uses; the scrub bar seeks.
-7. **Export config** downloads the JSON. Render it: `tapeworm that-file.json`.
+7. **Export config** downloads the JSON (render it: `tapeworm that-file.json`) —
+   or **Copy command** puts a fully self-contained render command on the
+   clipboard, config embedded via a stdin heredoc (`tapeworm -`). Paste it into
+   a terminal at the tapeworm repo; no exported file needed.
 
 If the page is scroll-gated (the overlay will say so), scroll through the intro
 by hand once to unlock it, then author. The renderer unlocks it automatically at

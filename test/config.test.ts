@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, resolveConfig } from '../src/config.ts';
+import { loadConfig, parseConfig, resolveConfig } from '../src/config.ts';
 import type { Config } from '../src/types.ts';
 
 const BASE: Config = { url: 'https://example.com', timeline: [{ at: 'top' }, { to: 'bottom' }] };
@@ -135,6 +135,16 @@ test('anchors carry fallbackText through normalisation', () => {
   });
   const move = r.timeline[1];
   assert.ok(move.type === 'move' && typeof move.to === 'object' && move.to.fallbackText === 'Pricing');
+});
+
+test('parseConfig parses raw text (the stdin path) with the same tolerances as loadConfig', () => {
+  const cfg = parseConfig(`{
+    // pasted from the extension's Copy command heredoc
+    "url": "https://example.com",
+    "timeline": [{ "at": "top" }, { "to": "bottom" },],
+  }`, 'stdin');
+  assert.equal(cfg.url, 'https://example.com');
+  assert.throws(() => parseConfig('{ nope }', 'stdin'), /not valid JSON \(stdin\)/);
 });
 
 test('loadConfig tolerates // comments and trailing commas, rejects garbage', () => {

@@ -21,6 +21,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   MV3 with `activeTab`/`scripting`/`storage`/`sidePanel` only.
 - Exported configs carry a `meta` provenance block (`authoredWith`,
   `authoredAt`, `authoredViewport`, `url`); the renderer ignores it.
+- `tapeworm -` reads the config from stdin. The extension's "Copy command"
+  button uses it to produce a fully self-contained render command (config
+  embedded in a heredoc) — no exported file needed.
 
 - Timeline format v2: `timeline` entries may now be typed steps (`start`,
   `move`, `hold`) as well as the existing segment form, mixed freely. Legacy
