@@ -9,6 +9,7 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "noEmit": true,
+    "allowJs": true,
     "strict": true,
     "noUncheckedIndexedAccess": false,
     "skipLibCheck": true,

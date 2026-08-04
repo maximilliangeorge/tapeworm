@@ -74,6 +74,69 @@ test('needs a timeline or auto', () => {
   assert.deepEqual(resolveConfig({ url: BASE.url, auto: { maxSections: 9 } }).auto, { maxSections: 9 });
 });
 
+test('legacy segments normalise to typed steps; the resolved timeline is always Step[]', () => {
+  const r = resolveConfig({
+    url: BASE.url,
+    timeline: [{ at: 'top', hold: 1 }, { to: 'bottom', duration: 2, ease: 'linear', hold: 0.5 }],
+  });
+  assert.deepEqual(r.timeline, [
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'move', to: 'bottom', duration: 2, ease: 'linear', hold: 0.5 },
+  ]);
+});
+
+test('a typed timeline passes through; a leading non-start step gets an implicit start at top', () => {
+  const r = resolveConfig({
+    url: BASE.url,
+    timeline: [{ type: 'move', to: 'bottom' }, { type: 'hold', seconds: 1 }],
+  });
+  assert.deepEqual(r.timeline[0], { type: 'start', at: 'top', hold: 0 });
+  assert.deepEqual(r.timeline[1], { type: 'move', to: 'bottom' });
+  assert.deepEqual(r.timeline[2], { type: 'hold', seconds: 1 });
+});
+
+test('interaction steps are format-valid but rejected with a forward-looking message', () => {
+  for (const step of [
+    { type: 'click', target: { selector: '.cta' } },
+    { type: 'hover', target: { selector: '.menu' } },
+    { type: 'wait', seconds: 1 },
+  ] as const) {
+    assert.throws(
+      () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, step] }),
+      /not executable yet.*will work unchanged/s,
+      step.type,
+    );
+  }
+});
+
+test('malformed steps fail with the index and the problem', () => {
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { type: 'start', at: 'top' }] }),
+    /timeline\[1\].*only valid as the first/,
+  );
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ type: 'hold' } as never] }),
+    /"seconds" >= 0/,
+  );
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ type: 'teleport' } as never] }),
+    /unknown step type "teleport"/,
+  );
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: ['top' as never] }),
+    /timeline\[0\] must be an object/,
+  );
+});
+
+test('anchors carry fallbackText through normalisation', () => {
+  const r = resolveConfig({
+    url: BASE.url,
+    timeline: [{ at: 'top' }, { to: { selector: '#pricing', fallbackText: 'Pricing' } }],
+  });
+  const move = r.timeline[1];
+  assert.ok(move.type === 'move' && typeof move.to === 'object' && move.to.fallbackText === 'Pricing');
+});
+
 test('loadConfig tolerates // comments and trailing commas, rejects garbage', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tapeworm-test-'));
   try {

@@ -9,6 +9,19 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Timeline format v2: `timeline` entries may now be typed steps (`start`,
+  `move`, `hold`) as well as the existing segment form, mixed freely. Legacy
+  configs are normalised internally and behave identically. Interaction steps
+  (`click`, `hover`, `wait`) are part of the format now — they parse, but are
+  rejected with a clear message until interaction support lands, so configs
+  authored today won't break when it does.
+- Anchors accept `fallbackText`: never used to find the element, only to turn
+  "selector matched nothing" into a diagnosis of whether the content is gone
+  or just re-marked-up.
+- A shared plain-JS core (`src/shared/`) for easing, anchor resolution, and
+  selector generation, used verbatim by both the renderer's injected runtime
+  and the upcoming visual authoring tools, so they cannot drift apart.
+
 - Test suites (`npm test`, Node's built-in runner, no new dependencies) covering
   easing math, config resolution, timeline building against a fake CDP session,
   and the injected page runtime booted in a `node:vm` sandbox — including the

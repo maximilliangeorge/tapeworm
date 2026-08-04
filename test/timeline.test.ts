@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildTrack, peakStep, type Track } from '../src/timeline.ts';
 import { resolveConfig } from '../src/config.ts';
 import type { Session } from '../src/cdp.ts';
-import type { Resolved, Segment } from '../src/types.ts';
+import type { Resolved, TimelineEntry } from '../src/types.ts';
 
 /**
  * buildTrack only calls session.eval with __sr.resolveAnchor / __sr.discoverSections
@@ -30,7 +30,7 @@ function fakeSession(opts: { max?: number; anchors?: Record<string, number>; sec
   } as unknown as Session;
 }
 
-function cfgWith(timeline: Segment[], over: Partial<Resolved> = {}): Resolved {
+function cfgWith(timeline: TimelineEntry[], over: Partial<Resolved> = {}): Resolved {
   const base = resolveConfig({ url: 'https://example.com', timeline: timeline.length ? timeline : undefined, auto: timeline.length ? undefined : true });
   return { ...base, fps: 10, ...over };
 }
@@ -69,15 +69,49 @@ test('eased travel is monotonic frame to frame', async () => {
   }
 });
 
-test('a later segment without "to", or an unresolvable anchor, throws', async () => {
-  await assert.rejects(
-    buildTrack(fakeSession(), cfgWith([{ at: 'top' }, { hold: 1 }])),
-    /needs a "to"/,
-  );
+test('a later segment without "to" fails at config time; an unresolvable anchor at build time', async () => {
+  assert.throws(() => cfgWith([{ at: 'top' }, { hold: 1 }]), /needs a "to"/);
   await assert.rejects(
     buildTrack(fakeSession(), cfgWith([{ at: 'top' }, { to: { selector: '.missing' } }])),
     /could not resolve anchor/,
   );
+});
+
+test('hold steps are first-class: frames at the current position, narrated in the plan', async () => {
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 0.5 },
+    { type: 'move', to: 1000, duration: 1, ease: 'linear' },
+    { type: 'hold', seconds: 2 },
+  ]);
+  const { offsets, plan } = await buildTrack(fakeSession(), cfg);
+  // 0.5s start hold + 1s move + 0.6s default hold (move is not last) + 2s hold step @10fps
+  assert.equal(offsets.length, 5 + 10 + 6 + 20);
+  assert.deepEqual(offsets.slice(-20), Array(20).fill(1000));
+  assert.match(plan[2], /hold 2\.00s \(y=1000\)/);
+});
+
+test('legacy segments and typed steps mix freely and produce identical tracks', async () => {
+  const legacy = cfgWith([
+    { at: 'top', hold: 1 },
+    { to: 'bottom', duration: 2, ease: 'linear', hold: 0.5 },
+  ]);
+  const typed = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'move', to: 'bottom', duration: 2, ease: 'linear', hold: 0.5 },
+  ]);
+  const a = await buildTrack(fakeSession({ max: 4000 }), legacy);
+  const b = await buildTrack(fakeSession({ max: 4000 }), typed);
+  assert.deepEqual(a.offsets, b.offsets);
+  assert.deepEqual(a.plan, b.plan);
+});
+
+test('actions are empty and the track is not sequential until interactions land', async () => {
+  const { actions, sequential } = await buildTrack(
+    fakeSession({ max: 4000 }),
+    cfgWith([{ at: 'top', hold: 0.2 }, { to: 'bottom', duration: 1 }]),
+  );
+  assert.deepEqual(actions, []);
+  assert.equal(sequential, false);
 });
 
 test('auto mode: discovered sections become the timeline, empty discovery falls back to a full sweep', async () => {
@@ -99,6 +133,6 @@ test('plan narrates each move with target, distance, and duration', async () => 
 });
 
 test('peakStep reports the largest per-frame move in device pixels', () => {
-  const track: Track = { offsets: [0, 10, 25, 25], plan: [] };
+  const track: Track = { offsets: [0, 10, 25, 25], actions: [], sequential: false, plan: [] };
   assert.equal(peakStep(track, 2), 30); // 15 css px * dpr 2
 });

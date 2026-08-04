@@ -16,6 +16,12 @@ export type Anchor =
       offset?: number;
       /** Which match to use if the selector matches several. Default 0. */
       nth?: number;
+      /**
+       * A snippet of the element's text at author time. NEVER used to find the
+       * element — only to turn "selector matched nothing" into a message that says
+       * whether the content is gone or just re-marked-up.
+       */
+      fallbackText?: string;
     };
 
 export type EaseName =
@@ -26,6 +32,10 @@ export type EaseName =
 /** A named easing, or a raw CSS cubic-bezier as [x1,y1,x2,y2]. */
 export type Ease = EaseName | [number, number, number, number];
 
+/**
+ * Legacy timeline entry (no `type` discriminant). Still accepted everywhere a
+ * `Step` is; `resolveConfig` normalises it, so nothing downstream ever sees one.
+ */
 export type Segment = {
   /** Target. Omit only on the first segment, which uses `at` instead. */
   to?: Anchor;
@@ -38,6 +48,25 @@ export type Segment = {
   /** Seconds to dwell after arriving. Default 0.8 on the first and last, else 0.6. */
   hold?: number;
 };
+
+/**
+ * Timeline format v2: a discriminated union, so future step kinds (interactions)
+ * are an addition rather than a breaking change. `timeline` entries may be a
+ * legacy `Segment` or a `Step`, mixed freely.
+ *
+ * `click`/`hover`/`wait` are part of the format NOW — configs containing them
+ * parse and typecheck — but are rejected with a clear message until interactions
+ * land, so designer-authored configs won't break when they do.
+ */
+export type Step =
+  | { type: 'start'; at: Anchor; hold?: number }
+  | { type: 'move'; to: Anchor; duration?: number; ease?: Ease; hold?: number }
+  | { type: 'hold'; seconds: number }
+  | { type: 'click'; target: Anchor; settle?: number }
+  | { type: 'hover'; target: Anchor; settle?: number }
+  | { type: 'wait'; forSelector?: string; seconds?: number };
+
+export type TimelineEntry = Segment | Step;
 
 export type VideoMode =
   /** Seek every <video> to the frame's timestamp. The default, and the whole point. */
@@ -59,7 +88,7 @@ export type Config = {
   };
   /** Default 60. Scroll is the worst case for temporal aliasing; 60 is worth it. */
   fps?: number;
-  timeline?: Segment[];
+  timeline?: TimelineEntry[];
   /**
    * With no timeline, discover candidate sections automatically and march through
    * them. Good for a first look at an unfamiliar page.
@@ -161,7 +190,8 @@ export type Resolved = {
   height: number;
   dpr: number;
   fps: number;
-  timeline: Segment[];
+  /** Always normalised: legacy segments have been converted to steps. */
+  timeline: Step[];
   auto: false | { maxSections: number };
   outPath: string;
   codec: 'h264' | 'prores' | 'png';

@@ -15,7 +15,21 @@
  * scroll offset, so setting the offset already puts them in the right place.
  */
 
+import { readFileSync } from 'node:fs';
 import type { Resolved } from './types.ts';
+
+/**
+ * The shared core, concatenated AHEAD of the payload rather than pasted into the
+ * template literal — so those files may contain backticks and ${} freely, and the
+ * extension can ship the very same files verbatim as content scripts.
+ */
+const SHARED_FILES = ['easing-core.js', 'anchor-core.js', 'selector.js'] as const;
+
+export function sharedCoreSource(): string {
+  return SHARED_FILES
+    .map((f) => readFileSync(new URL(`./shared/${f}`, import.meta.url), 'utf8'))
+    .join('\n');
+}
 
 export function runtimeSource(cfg: Resolved): string {
   const opts = JSON.stringify({
@@ -28,10 +42,14 @@ export function runtimeSource(cfg: Resolved): string {
     css: cfg.page.css,
   });
 
-  return `(() => {
+  return sharedCoreSource() + `\n(() => {
 'use strict';
 if (window.__sr) return;
 const OPT = ${opts};
+
+// anchor resolution and scroll primitives come from the shared core, so the
+// authoring tools and the renderer cannot drift apart
+const { maxScroll, setScroll, visibleRect, resolveAnchor, discoverSections } = globalThis.TapewormAnchors;
 
 // ---------------------------------------------------------------- natives
 const nRaf = window.requestAnimationFrame.bind(window);
@@ -255,15 +273,6 @@ function injectCSS(text, id) {
 const ACCEPT = /^(accept|accept all|allow all|agree|i agree|ok|got it|continue|understood|alles akzeptieren|akzeptieren|tout accepter|godta|aksepter|acceptera alla)$/i;
 const REJECT = /^(reject all|reject|decline|necessary only|only necessary|essential only|use necessary cookies only|refuse|avvis alle|neka alla)$/i;
 
-function visibleRect(el) {
-  try {
-    const r = el.getBoundingClientRect();
-    const st = getComputedStyle(el);
-    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return null;
-    return r.width > 0 && r.height > 0 ? r : null;
-  } catch (e) { return null; }
-}
-
 function dismissConsent() {
   if (!OPT.dismissConsent) return false;
   const clickable = Array.from(document.querySelectorAll('button,a[role=button],[role=button],input[type=button],input[type=submit]'));
@@ -356,57 +365,6 @@ try {
     },
   });
 } catch (e) {}
-
-// ---------------------------------------------------------------- scroll
-function maxScroll() {
-  const d = document.documentElement;
-  return Math.max(0, (d.scrollHeight || 0) - innerHeight);
-}
-function setScroll(y) {
-  const clamped = Math.min(Math.max(y, 0), maxScroll());
-  window.scrollTo({ top: clamped, left: 0, behavior: 'instant' });
-  return window.scrollY;
-}
-
-function resolveAnchor(a) {
-  if (a === 'top') return 0;
-  if (a === 'bottom') return maxScroll();
-  if (typeof a === 'number') return Math.min(Math.max(a, 0), maxScroll());
-  const list = document.querySelectorAll(a.selector);
-  const el = list[a.nth || 0];
-  if (!el) throw new Error('selector matched nothing: ' + a.selector + (a.nth ? ' [nth=' + a.nth + ']' : ''));
-  const r = el.getBoundingClientRect();
-  const top = r.top + window.scrollY;
-  let y;
-  if (a.align === 'center') y = top - (innerHeight - r.height) / 2;
-  else if (a.align === 'bottom') y = top + r.height - innerHeight;
-  else y = top;
-  return Math.min(Math.max(y + (a.offset || 0), 0), maxScroll());
-}
-
-/** Guess section boundaries for --auto: big blocks, in order, well separated. */
-function discoverSections(max) {
-  const roots = document.querySelectorAll('main > *, body > *, section, [data-section]');
-  const seen = [];
-  for (const el of roots) {
-    const r = visibleRect(el);
-    if (!r) continue;
-    const h = r.height;
-    if (h < innerHeight * 0.4) continue;
-    const top = Math.round(r.top + window.scrollY);
-    if (top > maxScroll()) continue;
-    if (seen.some((s) => Math.abs(s - top) < innerHeight * 0.6)) continue;
-    seen.push(top);
-  }
-  seen.sort((a, b) => a - b);
-  if (seen[0] !== 0) seen.unshift(0);
-  const end = maxScroll();
-  if (end - seen[seen.length - 1] > innerHeight * 0.4) seen.push(end);
-  if (seen.length <= max) return seen;
-  // thin evenly rather than truncating, so we still reach the footer
-  const step = (seen.length - 1) / (max - 1);
-  return Array.from({ length: max }, (_, i) => seen[Math.round(i * step)]);
-}
 
 // ---------------------------------------------------------------- boot
 function boot() {

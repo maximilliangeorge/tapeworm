@@ -86,6 +86,25 @@ tapeworm https://linear.app --out linear.mp4
 | `{ "selector": ".card", "nth": 2 }` | the third match |
 | `offset` | pixels added after alignment; negative = space above |
 
+An element anchor can also carry `"fallbackText"` — a snippet of the element's text at author time. It is **never** used to find the element. It only upgrades the error when a selector stops matching: tapeworm checks whether that text is still on the page, and tells you whether the content moved to different markup (fix the selector) or was removed outright (fix the timeline).
+
+### Typed steps
+
+Timeline entries can also be written as typed steps, and the two forms mix freely in one timeline:
+
+```jsonc
+{
+  "timeline": [
+    { "type": "start", "at": "top", "hold": 1.6 },
+    { "type": "move", "to": { "selector": "#features" }, "ease": "inOutCubic", "hold": 1.0 },
+    { "type": "hold", "seconds": 2 },
+    { "type": "move", "to": "bottom", "ease": "outCubic" }
+  ]
+}
+```
+
+`start` sets the opening position (first entry only), `move` is a scroll with the same `duration`/`ease`/`hold` fields as the segment form, and `hold` dwells at the current position. The format also defines `click`, `hover`, and `wait` steps for mid-timeline interactions; they are accepted by the parser but rejected with a clear message until interaction support lands — configs written with them today will work unchanged once it does.
+
 ---
 
 ## Motion

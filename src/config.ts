@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { extname, resolve as resolvePath } from 'node:path';
-import type { Config, Resolved } from './types.ts';
+import type { Config, Resolved, Segment, Step, TimelineEntry } from './types.ts';
 
 const CODEC_BY_EXT: Record<string, 'h264' | 'prores' | 'png'> = {
   '.mp4': 'h264',
@@ -28,6 +28,60 @@ export function loadConfig(path: string): Config {
   } catch (e) {
     throw new Error(`config is not valid JSON (${path}): ${(e as Error).message}`);
   }
+}
+
+const STEP_TYPES = ['start', 'move', 'hold', 'click', 'hover', 'wait'] as const;
+
+/** Defined in the format now so authored configs survive, executable later. */
+const PHASE3_TYPES = ['click', 'hover', 'wait'] as const;
+
+/**
+ * Normalise a timeline to `Step[]`. Entries may be legacy `Segment`s (no `type`)
+ * or `Step`s, mixed freely; nothing downstream ever sees the legacy form.
+ */
+export function normaliseTimeline(entries: TimelineEntry[]): Step[] {
+  const steps: Step[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (!e || typeof e !== 'object' || Array.isArray(e)) {
+      throw new Error(`timeline[${i}] must be an object`);
+    }
+
+    if ('type' in e && e.type !== undefined) {
+      if (!STEP_TYPES.includes(e.type as never)) {
+        throw new Error(`timeline[${i}]: unknown step type "${e.type}". Known: ${STEP_TYPES.join(', ')}`);
+      }
+      if (PHASE3_TYPES.includes(e.type as never)) {
+        throw new Error(
+          `timeline[${i}]: "${e.type}" steps are part of the format but not executable yet — ` +
+            `interaction support is coming. This config will work unchanged once it lands.`,
+        );
+      }
+      if (e.type === 'start' && i !== 0) {
+        throw new Error(`timeline[${i}]: "start" is only valid as the first entry`);
+      }
+      if (e.type === 'move' && e.to === undefined) {
+        throw new Error(`timeline[${i}]: a "move" step needs a "to"`);
+      }
+      if (e.type === 'hold' && !(typeof e.seconds === 'number' && Number.isFinite(e.seconds) && e.seconds >= 0)) {
+        throw new Error(`timeline[${i}]: a "hold" step needs "seconds" >= 0`);
+      }
+      if (i === 0 && e.type !== 'start') steps.push({ type: 'start', at: 'top', hold: 0 });
+      steps.push(e as Step);
+      continue;
+    }
+
+    // Legacy segment. The first one only ever provided the starting position;
+    // later ones must have a target.
+    const seg = e as Segment;
+    if (i === 0) {
+      steps.push({ type: 'start', at: seg.at ?? seg.to ?? 'top', hold: seg.hold });
+    } else {
+      if (seg.to === undefined) throw new Error(`timeline[${i}] needs a "to"`);
+      steps.push({ type: 'move', to: seg.to, duration: seg.duration, ease: seg.ease, hold: seg.hold });
+    }
+  }
+  return steps;
 }
 
 export function resolveConfig(input: Config): Resolved {
@@ -65,8 +119,10 @@ export function resolveConfig(input: Config): Resolved {
     throw new Error(`prewarm.mode must be full, cache or none (got "${prewarmMode}")`);
   }
 
-  const timeline = input.timeline ?? [];
-  if (!Array.isArray(timeline)) throw new Error('"timeline" must be an array');
+  if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
+    throw new Error('"timeline" must be an array');
+  }
+  const timeline = normaliseTimeline(input.timeline ?? []);
 
   const auto = input.auto
     ? { maxSections: (typeof input.auto === 'object' ? input.auto.maxSections : undefined) ?? 6 }
