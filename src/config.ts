@@ -101,12 +101,29 @@ export function normaliseTimeline(entries: TimelineEntry[]): Step[] {
 }
 
 export function resolveConfig(input: Config): Resolved {
-  if (!input.url || typeof input.url !== 'string') throw new Error('config needs a "url"');
+  if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
+    throw new Error('"timeline" must be an array');
+  }
+  const timeline = normaliseTimeline(input.timeline ?? []);
+
+  // The URL may live on the start step (authoring tools stamp it there when
+  // the first keyframe is created). Both present and disagreeing is a real
+  // mistake — the selectors were authored against ONE of them.
+  const first = timeline[0];
+  const startUrl = first && first.type === 'start' ? first.url : undefined;
+  if (input.url && startUrl && input.url !== startUrl) {
+    throw new Error(
+      `config "url" (${input.url}) and the timeline's start url (${startUrl}) disagree — ` +
+        `the selectors were authored against one of them; remove the other`,
+    );
+  }
+  const url = input.url ?? startUrl;
+  if (!url || typeof url !== 'string') throw new Error('config needs a "url"');
   try {
     // eslint-disable-next-line no-new
-    new URL(input.url);
+    new URL(url);
   } catch {
-    throw new Error(`"url" is not a valid URL: ${input.url}`);
+    throw new Error(`"url" is not a valid URL: ${url}`);
   }
 
   const dpr = input.viewport?.dpr ?? 2;
@@ -135,11 +152,6 @@ export function resolveConfig(input: Config): Resolved {
     throw new Error(`prewarm.mode must be full, cache or none (got "${prewarmMode}")`);
   }
 
-  if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
-    throw new Error('"timeline" must be an array');
-  }
-  const timeline = normaliseTimeline(input.timeline ?? []);
-
   const auto = input.auto
     ? { maxSections: (typeof input.auto === 'object' ? input.auto.maxSections : undefined) ?? 6 }
     : (false as const);
@@ -149,7 +161,7 @@ export function resolveConfig(input: Config): Resolved {
   }
 
   return {
-    url: input.url,
+    url,
     width: input.viewport?.width ?? 1280,
     height: input.viewport?.height ?? 800,
     dpr,

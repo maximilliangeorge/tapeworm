@@ -103,7 +103,7 @@ Timeline entries can also be written as typed steps, and the two forms mix freel
 }
 ```
 
-`start` sets the opening position (first entry only), `move` is a scroll with the same `duration`/`ease`/`hold` fields as the segment form, and `hold` dwells at the current position.
+`start` sets the opening position (first entry only), `move` is a scroll with the same `duration`/`ease`/`hold` fields as the segment form, and `hold` dwells at the current position. `start` may also carry a `url` — authoring tools stamp it when the first keyframe is created, so navigating during authoring can't silently re-point the config at the wrong page. It substitutes for the top-level `url`, and if both are present they must agree.
 
 **Interactions**: `{ "type": "click", "target": { "selector": "#menu-btn" }, "settle": 0.8 }` (and `hover` likewise) performs the interaction mid-timeline with **real input** through Chrome's input pipeline — `isTrusted` is true, `:hover` styles apply, and libraries that ignore synthetic events respond. `target` must be an element anchor; `settle` (default 0.6s) is how long the timeline dwells afterwards while whatever it triggered animates — a menu opening over 300ms starts at the right frame and eases correctly, courtesy of the same animation birth-time machinery everything else uses. Because frame N now shows whatever earlier clicks did to the page, an interactive timeline renders sequentially (`jobs` is forced to 1, like prewarm `cache`/`none`).
 

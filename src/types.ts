@@ -59,7 +59,13 @@ export type Segment = {
  * land, so designer-authored configs won't break when they do.
  */
 export type Step =
-  | { type: 'start'; at: Anchor; hold?: number }
+  /**
+   * `url` pins where the timeline begins — authoring tools stamp it when the
+   * first keyframe is created, so navigating during authoring can't silently
+   * re-point the config at the wrong page. When present it must agree with
+   * (or replace) the top-level `url`.
+   */
+  | { type: 'start'; at: Anchor; hold?: number; url?: string }
   | { type: 'move'; to: Anchor; duration?: number; ease?: Ease; hold?: number }
   | { type: 'hold'; seconds: number }
   | { type: 'click'; target: Anchor; settle?: number }

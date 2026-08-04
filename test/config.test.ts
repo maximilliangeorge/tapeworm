@@ -156,6 +156,26 @@ test('malformed steps fail with the index and the problem', () => {
   );
 });
 
+test('the start step can pin the url: used when config.url is absent, must agree when both exist', () => {
+  const timeline = [
+    { type: 'start', at: 'top', url: 'https://example.com/about' },
+    { type: 'move', to: 'bottom' },
+  ] as const;
+  const r = resolveConfig({ timeline: [...timeline] } as never);
+  assert.equal(r.url, 'https://example.com/about');
+
+  assert.equal(
+    resolveConfig({ url: 'https://example.com/about', timeline: [...timeline] }).url,
+    'https://example.com/about',
+    'agreement is fine',
+  );
+  assert.throws(
+    () => resolveConfig({ url: 'https://example.com/other', timeline: [...timeline] }),
+    /disagree.*authored against one of them/s,
+  );
+  assert.throws(() => resolveConfig({ timeline: [{ at: 'top' }, { to: 'bottom' }] } as never), /needs a "url"/);
+});
+
 test('anchors carry fallbackText through normalisation', () => {
   const r = resolveConfig({
     url: BASE.url,

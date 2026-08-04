@@ -18,6 +18,7 @@ let state = {
 let totalSec = 0;
 let playing = false;
 let picking = null; // null | 'move' | 'click' | 'hover'
+let currentPageUrl = ''; // where the tab is NOW — the timeline's url is pinned on the start step
 
 // ---------------------------------------------------------------- messaging
 async function send(type, data) {
@@ -57,6 +58,11 @@ function stripInternal(step) {
 
 // ---------------------------------------------------------------- events from the page
 function onPicked(d) {
+  // The first keyframe pins the timeline to the page it was authored on.
+  // Navigating later (a recorded click, or just browsing) must not re-point
+  // the config — the early selectors only exist back there.
+  const start = state.steps[0];
+  if (start && start.type === 'start' && !start.url && currentPageUrl) start.url = currentPageUrl;
   if (d.mode === 'click' || d.mode === 'hover') {
     state.steps.push({ type: d.mode, target: d.anchor, _quality: d.quality });
     setPicking(null); // interactions arm for ONE pick — back to normal after
@@ -70,9 +76,9 @@ function onPicked(d) {
 }
 
 function onPageInfo(d) {
-  state.url = d.url || state.url;
+  currentPageUrl = d.url || currentPageUrl;
   state.title = d.title || state.title;
-  $('page-title').textContent = state.title || state.url;
+  $('page-title').textContent = state.title || currentPageUrl;
   $('gate-note').hidden = !d.scrollGated;
   if (d.window) {
     const s = $('vp-status');
@@ -127,6 +133,10 @@ function onPreviewTime(d) {
 }
 
 // ---------------------------------------------------------------- steps UI
+function shortUrl(u) {
+  try { const p = new URL(u); return p.hostname + (p.pathname === '/' ? '' : p.pathname); } catch { return u; }
+}
+
 function anchorLabel(a) {
   if (typeof a === 'string') return a;
   if (typeof a === 'number') return a + 'px';
@@ -140,8 +150,11 @@ function renderSteps() {
     const li = document.createElement('li');
     li.className = 'step';
     if (step.type === 'start') {
+      const label = span('sel', 'start at ' + anchorLabel(step.at) +
+        (step.url ? ' — ' + shortUrl(step.url) : ' (url pinned on first pick)'));
+      if (step.url) label.title = step.url;
       li.append(row(
-        span('sel', 'start at ' + anchorLabel(step.at)),
+        label,
         field('hold s', numInput(step.hold, 0.8, (v) => { step.hold = v; commit(); })),
       ));
     } else if (step.type === 'hold') {
@@ -329,7 +342,9 @@ for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr',
 // ---------------------------------------------------------------- export
 async function buildConfig() {
   const info = await send('info');
-  const url = (info && info.url) || state.url;
+  // The start step's pinned url wins — the tab may have navigated since.
+  const start = state.steps[0];
+  const url = (start && start.type === 'start' && start.url) || (info && info.url) || currentPageUrl;
   return {
     url,
     viewport: { width: state.settings.width, height: state.settings.height, dpr: state.settings.dpr },

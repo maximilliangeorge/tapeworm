@@ -34,6 +34,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
   CSS rules, ended by later interactions, scrub-aware) and clicks (fired once
   during playback; effects persist until the page is reloaded). `wait`
   remains format-only.
+- The `start` step can carry a `url`, and the extension pins the page URL
+  there when the first keyframe is added — so navigating during authoring
+  (recorded clicks or plain browsing) no longer exports a config pointing at
+  the wrong page. Config `url` and start `url` must agree if both exist.
 - Clicks that navigate are supported: anchors after the click resolve on the
   destination page. Interactions are performed while the plan is built, the
   page is reset for the capture pass, and each mid-render navigation is
