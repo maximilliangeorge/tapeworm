@@ -1,0 +1,39 @@
+{
+  // https://djernesbell.com — built from a live inspection of the real page.
+  //
+  // Two things make this site unusual, both handled automatically:
+  //
+  // 1. The intro is SCROLL-GATED, not time-gated. Until you scroll through
+  //    "REPAIR OVER REPLACE", document.scrollHeight equals the viewport and there is
+  //    nothing to film. Waiting does nothing — the page wants wheel input. The
+  //    unlockIntro step feeds it real wheel events until the document opens up
+  //    (measured: about 5 ticks), then returns to the top. Unlocking is one-way,
+  //    so going back to the top does not replay it.
+  //
+  // 2. Three <video> elements, all autoplay+loop, encoded as H.264/mp4. Use real
+  //    Chrome rather than a codec-less Chromium build or they capture black.
+  //
+  // Section offsets shift with viewport size, so these are selectors, not pixels.
+
+  "url": "https://djernesbell.com/en",
+
+  "viewport": { "width": 1440, "height": 900, "dpr": 2 },
+  "fps": 60,
+  "output": { "path": "djernesbell.mp4" },
+
+  "page": {
+    "unlockIntro": { "maxTicks": 40, "deltaY": 400 },
+    "settle": 800,
+    "video": "sync"
+  },
+
+  "prewarm": { "mode": "full" },
+
+  "timeline": [
+    { "at": "top", "hold": 2.0 },
+    { "to": { "selector": "#highlights", "align": "top" }, "hold": 1.4 },
+    { "to": { "selector": "#work", "align": "top" }, "ease": "inOutCubic", "hold": 1.4 },
+    { "to": { "selector": "#practice", "align": "top" }, "ease": "inOutCubic", "hold": 1.4 },
+    { "to": "bottom", "ease": "outCubic", "hold": 2.0 }
+  ]
+}

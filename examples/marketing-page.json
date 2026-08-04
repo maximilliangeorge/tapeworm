@@ -1,0 +1,16 @@
+{
+  // A hand-authored timeline. Anchors are CSS selectors resolved at capture time,
+  // so this config survives a late-loading image, a font swap, or a viewport change.
+  "url": "https://example.com",
+
+  "viewport": { "width": 1440, "height": 900, "dpr": 2 },
+  "fps": 60,
+  "output": { "path": "marketing.mp4" },
+
+  "timeline": [
+    { "at": "top", "hold": 1.6 },
+    { "to": { "selector": "#features", "align": "top", "offset": -80 }, "hold": 1.0 },
+    { "to": { "selector": "#pricing", "align": "center" }, "ease": "inOutCubic", "hold": 1.6 },
+    { "to": { "selector": "footer", "align": "bottom" }, "ease": "outCubic", "hold": 1.8 }
+  ]
+}

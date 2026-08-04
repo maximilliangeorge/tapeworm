@@ -1,0 +1,21 @@
+{
+  // Escape hatches, for a page that fights back.
+  "url": "https://example.com",
+  "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "output": { "path": "stubborn.mp4" },
+  "auto": { "maxSections": 5 },
+
+  "prewarm": {
+    "maxHeight": 25000,
+    "mode": "cache"
+  },
+
+  "page": {
+    "clock": "real",
+    "video": "freeze",
+    "css": ".chat-widget, .promo-banner { display: none !important; }",
+    "script": "window.addEventListener('load', () => document.querySelector('.autoplay-carousel')?.remove());"
+  },
+
+  "jobs": 2
+}

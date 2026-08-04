@@ -1,0 +1,27 @@
+{
+  "name": "scrollrec",
+  "version": "0.1.0",
+  "description": "Record website scrollthroughs as high-quality video, with keyframed easing.",
+  "type": "module",
+  "bin": {
+    "scrollrec": "./bin/scrollrec.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "scrollrec": "node bin/scrollrec.ts"
+  },
+  "files": [
+    "bin",
+    "src",
+    "examples",
+    "README.md"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

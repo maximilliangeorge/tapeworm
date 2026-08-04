@@ -1,0 +1,548 @@
+/**
+ * The in-page runtime, injected via Page.addScriptToEvaluateOnNewDocument so it
+ * lands *before* the page's own scripts and can override the clock they capture.
+ *
+ * Everything that depends on time is driven from a frame index instead of the wall
+ * clock, which is what makes frames independent of each other (and therefore what
+ * makes parallel rendering safe):
+ *
+ *   scroll     -> scrollTo({behavior:'instant'})
+ *   animations -> document.getAnimations(), paused, currentTime set per frame
+ *   video      -> paused, currentTime seeked, awaited via requestVideoFrameCallback
+ *   JS timers  -> virtual clock (Date.now / performance.now / rAF / setTimeout)
+ *
+ * Scroll-driven animations are deliberately left alone: they're a pure function of
+ * scroll offset, so setting the offset already puts them in the right place.
+ */
+
+import type { Resolved } from './types.ts';
+
+export function runtimeSource(cfg: Resolved): string {
+  const opts = JSON.stringify({
+    fps: cfg.fps,
+    clock: cfg.page.clock,
+    seekAnimations: cfg.page.seekAnimations,
+    video: cfg.page.video,
+    dismissConsent: cfg.page.dismissConsent,
+    hideOverlays: cfg.page.hideOverlays,
+    css: cfg.page.css,
+  });
+
+  return `(() => {
+'use strict';
+if (window.__sr) return;
+const OPT = ${opts};
+
+// ---------------------------------------------------------------- natives
+const nRaf = window.requestAnimationFrame.bind(window);
+const nCaf = window.cancelAnimationFrame.bind(window);
+const nSetTimeout = window.setTimeout.bind(window);
+const nClearTimeout = window.clearTimeout.bind(window);
+const nDate = window.Date;
+const nPerfNow = window.performance.now.bind(window.performance);
+const DATE_ORIGIN = nDate.now();
+
+// ---------------------------------------------------------------- clock
+let mode = 'live';         // 'live' while loading/pre-warming, 'stepped' while capturing
+let vnow = 0;              // virtual ms since start
+let liveAnchor = nPerfNow();
+let rafQueue = [];         // {id, cb}
+let timers = [];           // {id, at, cb, interval}
+let nextId = 1;
+
+function flush() {
+  // timers first, then rAF — matches the order a real frame would run them in
+  for (let guard = 0; guard < 64; guard++) {
+    const due = timers.filter((t) => t.at <= vnow).sort((a, b) => a.at - b.at);
+    if (!due.length) break;
+    for (const t of due) {
+      if (t.interval == null) timers = timers.filter((x) => x !== t);
+      else t.at = vnow + Math.max(1, t.interval);
+      try { t.cb(); } catch (e) { /* page's problem, not ours */ }
+    }
+  }
+  const batch = rafQueue;
+  rafQueue = [];
+  for (const r of batch) { try { r.cb(vnow); } catch (e) {} }
+}
+
+function liveLoop() {
+  if (mode === 'live') { vnow = nPerfNow() - liveAnchor; flush(); }
+  nRaf(liveLoop);
+}
+nRaf(liveLoop);
+
+if (OPT.clock === 'virtual') {
+  window.requestAnimationFrame = function (cb) {
+    const id = nextId++;
+    rafQueue.push({ id, cb });
+    return id;
+  };
+  window.cancelAnimationFrame = function (id) { rafQueue = rafQueue.filter((r) => r.id !== id); };
+  window.setTimeout = function (cb, ms) {
+    const args = Array.prototype.slice.call(arguments, 2);
+    const id = nextId++;
+    const fn = typeof cb === 'function' ? () => cb.apply(null, args) : () => { try { eval(String(cb)); } catch (e) {} };
+    timers.push({ id, at: vnow + (Number(ms) || 0), cb: fn, interval: null });
+    return id;
+  };
+  window.setInterval = function (cb, ms) {
+    const args = Array.prototype.slice.call(arguments, 2);
+    const id = nextId++;
+    const every = Math.max(1, Number(ms) || 0);
+    timers.push({ id, at: vnow + every, cb: () => cb.apply(null, args), interval: every });
+    return id;
+  };
+  window.clearTimeout = window.clearInterval = function (id) { timers = timers.filter((t) => t.id !== id); };
+
+  const VDate = function (...args) {
+    if (!(this instanceof VDate)) return new nDate(DATE_ORIGIN + vnow).toString();
+    return args.length === 0 ? new nDate(DATE_ORIGIN + vnow) : new nDate(...args);
+  };
+  VDate.prototype = nDate.prototype;
+  VDate.now = () => DATE_ORIGIN + vnow;
+  VDate.parse = nDate.parse;
+  VDate.UTC = nDate.UTC;
+  window.Date = VDate;
+  try { window.performance.now = () => vnow; } catch (e) {}
+}
+
+// ---------------------------------------------------------------- videos
+const videos = new Set();
+function trackVideo(v) {
+  if (videos.has(v) || OPT.video === 'ignore') return;
+  videos.add(v);
+  try { v.muted = true; v.autoplay = false; v.pause(); } catch (e) {}
+}
+function scanVideos(root) {
+  if (!root || !root.querySelectorAll) return;
+  if (root.tagName === 'VIDEO') trackVideo(root);
+  root.querySelectorAll('video').forEach(trackVideo);
+}
+
+function nearViewport(el) {
+  try {
+    const r = el.getBoundingClientRect();
+    return r.bottom > -200 && r.top < innerHeight + 200 && r.width > 0 && r.height > 0;
+  } catch (e) { return false; }
+}
+
+function seekVideo(v, tSec) {
+  const dur = v.duration;
+  if (!isFinite(dur) || dur <= 0) return null;          // live stream / not loaded
+  if (!v.seekable || v.seekable.length === 0) return null;
+  // half-frame bias: seeking to an exact frame boundary is ambiguous and lands
+  // on either side of it depending on the container's timestamp rounding
+  let target = tSec + 0.5 / OPT.fps;
+  if (v.loop || target > dur) target = target % dur;
+  target = Math.min(Math.max(target, 0), Math.max(0, dur - 1e-3));
+  try { v.pause(); } catch (e) {}
+  v.__srWant = target;
+  if (Math.abs(v.currentTime - target) < 1e-4) return null;
+
+  const visible = nearViewport(v);
+  const p = new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    if (visible && typeof v.requestVideoFrameCallback === 'function') {
+      v.requestVideoFrameCallback(() => finish());
+    } else {
+      v.addEventListener('seeked', finish, { once: true });
+    }
+    // never let one stubborn element hang the whole render
+    nSetTimeout(finish, visible ? 1200 : 250);
+  });
+  try { v.currentTime = target; } catch (e) { return null; }
+  return p;
+}
+
+function syncVideos(tSec) {
+  if (OPT.video === 'ignore') return Promise.resolve();
+  if (OPT.video === 'freeze') { videos.forEach((v) => { try { v.pause(); } catch (e) {} }); return Promise.resolve(); }
+  const waits = [];
+  videos.forEach((v) => { const p = seekVideo(v, tSec); if (p) waits.push(p); });
+  return waits.length ? Promise.all(waits) : Promise.resolve();
+}
+
+// ---------------------------------------------------------------- images
+/**
+ * Images that entered the viewport this frame may still be in flight. Without
+ * waiting, a lazy image reveals as a fade-in of an empty box followed by a pop.
+ * Cheap when nothing is pending, which is the normal case after a pre-warm.
+ */
+function pendingImages() {
+  const out = [];
+  const imgs = document.images || [];
+  for (let i = 0; i < imgs.length; i++) {
+    const img = imgs[i];
+    if (img.complete) continue;
+    if (!img.currentSrc && !img.src) continue;
+    let r;
+    try { r = img.getBoundingClientRect(); } catch (e) { continue; }
+    if (r.bottom < -innerHeight || r.top > innerHeight * 2) continue;   // far off-screen
+    out.push(img);
+  }
+  return out;
+}
+
+function waitForImages(budgetMs) {
+  const list = pendingImages();
+  if (!list.length) return Promise.resolve(0);
+  const each = list.map((img) => new Promise((res) => {
+    const done = () => { try { img.decode().then(res, res); } catch (e) { res(); } };
+    img.addEventListener('load', done, { once: true });
+    img.addEventListener('error', res, { once: true });
+  }));
+  return Promise.race([
+    Promise.all(each),
+    new Promise((res) => nSetTimeout(res, budgetMs)),
+  ]).then(() => list.length);
+}
+
+// ---------------------------------------------------------------- animations
+/**
+ * When each animation was first seen, in virtual ms. Without this, an animation
+ * that starts mid-render (a scroll reveal, say) gets currentTime = absolute render
+ * time, which is far past its duration — so it snaps to completed in a single frame
+ * instead of animating. Anything already running at frame 0 gets birth 0, which is
+ * what you want for a decorative infinite loop.
+ */
+let animBirth = new WeakMap();
+
+/**
+ * Where each animation stood when the page finished preparing, captured BEFORE any
+ * frame is rendered. Reading it live at beginCapture time would be too late: rendering
+ * even one probe frame seeks animations, so the original position is already gone.
+ */
+let animOrigin = new WeakMap();
+
+function seekAnimations(ms) {
+  if (!OPT.seekAnimations || !document.getAnimations) return;
+  let anims;
+  try { anims = document.getAnimations(); } catch (e) { return; }
+  for (const a of anims) {
+    try {
+      // A non-document timeline means a ScrollTimeline/ViewTimeline: progress-based,
+      // already correct because we set the scroll offset. Touching it would break it.
+      if (a.timeline && typeof DocumentTimeline !== 'undefined' && !(a.timeline instanceof DocumentTimeline)) continue;
+      if (!animBirth.has(a)) animBirth.set(a, ms);
+      if (a.playState !== 'paused') a.pause();
+      a.currentTime = Math.max(0, ms - animBirth.get(a));
+    } catch (e) {}
+  }
+}
+
+// ---------------------------------------------------------------- hygiene
+const HYGIENE = [
+  'html,body{scroll-behavior:auto !important;overscroll-behavior:none !important}',
+  '*{overflow-anchor:none !important}',
+  '*{caret-color:transparent !important}',
+  '*:focus,*:focus-visible{outline:none !important}',
+  '::selection{background:transparent !important}',
+  'html{-webkit-tap-highlight-color:transparent !important}',
+  '*{content-visibility:visible !important}',
+  '::-webkit-scrollbar{width:0 !important;height:0 !important;display:none !important}',
+].join('');
+
+function injectCSS(text, id) {
+  const s = document.createElement('style');
+  s.id = id;
+  s.textContent = text;
+  (document.head || document.documentElement).appendChild(s);
+}
+
+// ---------------------------------------------------------------- consent + overlays
+const ACCEPT = /^(accept|accept all|allow all|agree|i agree|ok|got it|continue|understood|alles akzeptieren|akzeptieren|tout accepter|godta|aksepter|acceptera alla)$/i;
+const REJECT = /^(reject all|reject|decline|necessary only|only necessary|essential only|use necessary cookies only|refuse|avvis alle|neka alla)$/i;
+
+function visibleRect(el) {
+  try {
+    const r = el.getBoundingClientRect();
+    const st = getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return null;
+    return r.width > 0 && r.height > 0 ? r : null;
+  } catch (e) { return null; }
+}
+
+function dismissConsent() {
+  if (!OPT.dismissConsent) return false;
+  const clickable = Array.from(document.querySelectorAll('button,a[role=button],[role=button],input[type=button],input[type=submit]'));
+  const score = (el) => {
+    const txt = (el.innerText || el.value || '').trim();
+    if (!txt || txt.length > 40) return 0;
+    if (!visibleRect(el)) return 0;
+    // prefer rejecting: fewer cookies, and "reject" rarely opens a second dialog
+    if (REJECT.test(txt)) return 2;
+    if (ACCEPT.test(txt)) return 1;
+    return 0;
+  };
+  const best = clickable.map((el) => ({ el, s: score(el) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s)[0];
+  if (best) { try { best.el.click(); } catch (e) {} }
+
+  // whatever the dialog did to the body, undo it
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    el.style.setProperty('overflow', 'visible', 'important');
+    el.style.setProperty('position', 'static', 'important');
+    el.style.setProperty('height', 'auto', 'important');
+  }
+  return !!best;
+}
+
+function isOverlay(el) {
+  const st = getComputedStyle(el);
+  if (st.position !== 'fixed' && st.position !== 'sticky') return false;
+  const r = visibleRect(el);
+  if (!r) return false;
+  const coverage = (r.width * r.height) / (innerWidth * innerHeight);
+  const z = parseInt(st.zIndex, 10) || 0;
+  // a top nav is fixed too — keep anything short and anchored near the top
+  const isTopBar = r.top <= 4 && r.height < innerHeight * 0.25;
+  const isBottomBar = r.bottom >= innerHeight - 4 && r.height < innerHeight * 0.12;
+  if (isTopBar || isBottomBar) return false;
+  return coverage > 0.25 || (z >= 1000 && coverage > 0.05);
+}
+
+function hideOverlays() {
+  if (!OPT.hideOverlays) return 0;
+  let n = 0;
+  for (const el of Array.from(document.body ? document.body.children : [])) {
+    try { if (isOverlay(el)) { el.style.setProperty('display', 'none', 'important'); n++; } } catch (e) {}
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------- lazy content
+function eagerize(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('img[loading="lazy"],iframe[loading="lazy"]').forEach((el) => { el.loading = 'eager'; });
+  root.querySelectorAll('img[decoding="async"]').forEach((el) => { el.decoding = 'sync'; });
+  root.querySelectorAll('[data-src]:not([src]),[data-srcset]:not([srcset])').forEach((el) => {
+    if (el.dataset.src && !el.src) el.src = el.dataset.src;
+    if (el.dataset.srcset && !el.srcset) el.srcset = el.dataset.srcset;
+  });
+}
+
+// ---------------------------------------------------------------- smooth-scroll hijackers
+function neutraliseHijackers() {
+  const notes = [];
+  try {
+    if (window.__srLenis) { window.__srLenis.stop(); notes.push('lenis'); }
+    else if (window.lenis && window.lenis.stop) { window.lenis.stop(); notes.push('lenis'); }
+  } catch (e) {}
+  try {
+    const S = window.ScrollSmoother;
+    if (S && S.get && S.get()) { S.get().smooth(0); S.get().paused(true); notes.push('scrollsmoother'); }
+  } catch (e) {}
+  try {
+    if (window.ScrollTrigger && window.ScrollTrigger.normalizeScroll) {
+      window.ScrollTrigger.normalizeScroll(false);
+      notes.push('scrolltrigger');
+    }
+  } catch (e) {}
+  return notes;
+}
+
+// Stash a Lenis instance the moment it's constructed — sites rarely expose one.
+try {
+  let _L;
+  Object.defineProperty(window, 'Lenis', {
+    configurable: true,
+    get() { return _L; },
+    set(v) {
+      _L = typeof v === 'function' ? new Proxy(v, {
+        construct(target, args, nt) { const i = Reflect.construct(target, args, nt); window.__srLenis = i; return i; },
+      }) : v;
+    },
+  });
+} catch (e) {}
+
+// ---------------------------------------------------------------- scroll
+function maxScroll() {
+  const d = document.documentElement;
+  return Math.max(0, (d.scrollHeight || 0) - innerHeight);
+}
+function setScroll(y) {
+  const clamped = Math.min(Math.max(y, 0), maxScroll());
+  window.scrollTo({ top: clamped, left: 0, behavior: 'instant' });
+  return window.scrollY;
+}
+
+function resolveAnchor(a) {
+  if (a === 'top') return 0;
+  if (a === 'bottom') return maxScroll();
+  if (typeof a === 'number') return Math.min(Math.max(a, 0), maxScroll());
+  const list = document.querySelectorAll(a.selector);
+  const el = list[a.nth || 0];
+  if (!el) throw new Error('selector matched nothing: ' + a.selector + (a.nth ? ' [nth=' + a.nth + ']' : ''));
+  const r = el.getBoundingClientRect();
+  const top = r.top + window.scrollY;
+  let y;
+  if (a.align === 'center') y = top - (innerHeight - r.height) / 2;
+  else if (a.align === 'bottom') y = top + r.height - innerHeight;
+  else y = top;
+  return Math.min(Math.max(y + (a.offset || 0), 0), maxScroll());
+}
+
+/** Guess section boundaries for --auto: big blocks, in order, well separated. */
+function discoverSections(max) {
+  const roots = document.querySelectorAll('main > *, body > *, section, [data-section]');
+  const seen = [];
+  for (const el of roots) {
+    const r = visibleRect(el);
+    if (!r) continue;
+    const h = r.height;
+    if (h < innerHeight * 0.4) continue;
+    const top = Math.round(r.top + window.scrollY);
+    if (top > maxScroll()) continue;
+    if (seen.some((s) => Math.abs(s - top) < innerHeight * 0.6)) continue;
+    seen.push(top);
+  }
+  seen.sort((a, b) => a - b);
+  if (seen[0] !== 0) seen.unshift(0);
+  const end = maxScroll();
+  if (end - seen[seen.length - 1] > innerHeight * 0.4) seen.push(end);
+  if (seen.length <= max) return seen;
+  // thin evenly rather than truncating, so we still reach the footer
+  const step = (seen.length - 1) / (max - 1);
+  return Array.from({ length: max }, (_, i) => seen[Math.round(i * step)]);
+}
+
+// ---------------------------------------------------------------- boot
+function boot() {
+  injectCSS(HYGIENE, '__sr_hygiene');
+  if (OPT.css) injectCSS(OPT.css, '__sr_user_css');
+  scanVideos(document);
+  eagerize(document);
+  const mo = new MutationObserver((records) => {
+    for (const rec of records) {
+      for (const n of rec.addedNodes) { scanVideos(n); eagerize(n); }
+    }
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+}
+if (document.documentElement) boot();
+else document.addEventListener('readystatechange', boot, { once: true });
+
+// ---------------------------------------------------------------- public API
+window.__sr = {
+  version: 1,
+  setMode(m) {
+    mode = m;
+    if (m === 'live') liveAnchor = nPerfNow() - vnow;
+  },
+  /** Render one frame. Returns once the page is visually settled for it. */
+  /**
+   * Reset per-capture state. Call once before the frame loop.
+   *
+   * restartExisting=false (the default) stamps animations that are ALREADY running
+   * with a negative birth equal to their current position, so they carry on from where
+   * they are instead of rewinding. Without this, an intro animation you deliberately
+   * waited out would replay from the beginning on frame 0 — the whole point of waiting
+   * for it, undone.
+   */
+  beginCapture(restartExisting) {
+    animBirth = new WeakMap();
+    mode = 'stepped';
+    vnow = 0;
+    if (!restartExisting && document.getAnimations) {
+      try {
+        for (const a of document.getAnimations()) {
+          if (a.timeline && typeof DocumentTimeline !== 'undefined' && !(a.timeline instanceof DocumentTimeline)) continue;
+          const t = animOrigin.has(a) ? animOrigin.get(a) : (typeof a.currentTime === 'number' ? a.currentTime : 0);
+          animBirth.set(a, -t);
+        }
+      } catch (e) {}
+    }
+  },
+
+  /** Record where every animation stands right now. Called once, after the page settles. */
+  snapshotAnimations() {
+    animOrigin = new WeakMap();
+    if (!document.getAnimations) return 0;
+    let n = 0;
+    try {
+      for (const a of document.getAnimations()) {
+        animOrigin.set(a, typeof a.currentTime === 'number' ? a.currentTime : 0);
+        n++;
+      }
+    } catch (e) {}
+    return n;
+  },
+
+  /**
+   * How many finite animations are still running. Infinite ones are excluded: a
+   * decorative loop never stops, so waiting on it would just burn the timeout.
+   */
+  busyAnimations() {
+    if (!document.getAnimations) return 0;
+    let n = 0;
+    try {
+      for (const a of document.getAnimations()) {
+        if (a.playState !== 'running') continue;
+        let iters = 1;
+        try { iters = a.effect.getTiming().iterations; } catch (e) {}
+        if (iters === Infinity) continue;
+        n++;
+      }
+    } catch (e) {}
+    return n;
+  },
+  /** Render one frame. Returns once the page is visually settled for it. */
+  async frame(y, tSec, imageBudgetMs) {
+    mode = 'stepped';
+    vnow = tSec * 1000;
+    const actual = setScroll(y);
+    flush();                    // timers + rAF at the virtual timestamp — this is
+                                // where IntersectionObserver-driven reveals get added
+    seekAnimations(vnow);       // ...so seek after the flush, not before
+    const videoWait = syncVideos(tSec);
+    const imgWait = waitForImages(imageBudgetMs == null ? 1500 : imageBudgetMs);
+    await videoWait;
+    const loaded = await imgWait;
+    seekAnimations(vnow);       // late arrivals get their birth stamped here
+    await new Promise((r) => nRaf(() => nRaf(r)));   // let layout + paint settle
+    return { scrollY: window.scrollY, requested: y, actual, max: maxScroll(), imagesAwaited: loaded };
+  },
+  resolveAnchor,
+  discoverSections,
+  dismissConsent,
+  hideOverlays,
+  neutraliseHijackers,
+  eagerize: () => eagerize(document),
+  maxScroll,
+  setScroll,
+  videoCount: () => videos.size,
+  /**
+   * Per-video health check. The common failure is a server that ignores HTTP Range
+   * requests: currentTime assignment silently no-ops and every frame shows the same
+   * picture, with no error anywhere.
+   */
+  videoReport() {
+    return Array.from(videos).map((v) => {
+      const want = v.__srWant;
+      const src = (v.currentSrc || v.src || '(no src)');
+      return {
+        src: src.length > 70 ? '…' + src.slice(-68) : src,
+        duration: isFinite(v.duration) ? v.duration : null,
+        seekableRanges: v.seekable ? v.seekable.length : 0,
+        readyState: v.readyState,
+        currentTime: v.currentTime,
+        wanted: want == null ? null : want,
+        ok: want == null ? true : Math.abs(v.currentTime - want) < 0.05,
+      };
+    });
+  },
+  metrics() {
+    return {
+      scrollY: window.scrollY,
+      max: maxScroll(),
+      docHeight: document.documentElement.scrollHeight,
+      videos: videos.size,
+      animations: document.getAnimations ? document.getAnimations().length : 0,
+      fontsReady: document.fonts ? document.fonts.status === 'loaded' : true,
+    };
+  },
+};
+})();`;
+}

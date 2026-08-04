@@ -1,0 +1,20 @@
+{
+  // Film the scroll reveals as they happen, rather than a page where everything
+  // has already appeared. Pre-warm fills the HTTP cache, then reloads — so images
+  // are instantly available and the fade-ins animate over their real duration.
+  "url": "https://example.com",
+  "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "fps": 60,
+  "output": { "path": "reveals.mp4" },
+
+  "prewarm": {
+    "mode": "cache",
+    "imageBudget": 2500
+  },
+
+  "timeline": [
+    { "at": "top", "hold": 1.2 },
+    { "to": { "selector": "#gallery", "align": "top", "offset": -60 }, "duration": 3.5, "ease": "inOutSine", "hold": 1.0 },
+    { "to": "bottom", "ease": "outCubic", "hold": 1.5 }
+  ]
+}

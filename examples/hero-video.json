@@ -1,0 +1,17 @@
+{
+  // A page whose hero is a playing video. Nothing special is needed — "video": "sync"
+  // is the default; every <video> is seeked to the frame's timestamp and awaited.
+  "url": "https://example.com",
+  "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "fps": 60,
+  "output": { "path": "hero.mov", "codec": "prores" },
+
+  "timeline": [
+    { "at": "top", "hold": 3.0 },
+    { "to": { "selector": "#next-section", "align": "top", "offset": -64 }, "hold": 1.2 }
+  ],
+
+  "page": {
+    "settle": 1200
+  }
+}
