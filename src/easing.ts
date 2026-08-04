@@ -14,9 +14,10 @@ export type EaseFn = (t: number) => number;
 
 type EasingCore = {
   cubicBezier: (x1: number, y1: number, x2: number, y2: number) => EaseFn;
-  NAMED: Record<EaseName, [number, number, number, number]>;
+  NAMED: Record<Exclude<EaseName, 'linear' | 'natural'>, [number, number, number, number]>;
   DEFAULT_EASE: EaseName;
-  resolveEase: (ease: Ease | undefined) => EaseFn;
+  naturalEase: (distanceVh: number) => EaseFn;
+  resolveEase: (ease: Ease | undefined, distanceVh?: number) => EaseFn;
   peakSlope: (ease: EaseFn, samples?: number) => number;
   MAX_PEAK_VH_PER_SEC: number;
   autoDuration: (distancePx: number, viewportPx: number, ease: EaseFn) => number;
@@ -29,6 +30,7 @@ if (!core) throw new Error('shared/easing-core.js did not install TapewormEasing
 
 export const cubicBezier: EasingCore['cubicBezier'] = core.cubicBezier;
 export const DEFAULT_EASE: EaseName = core.DEFAULT_EASE;
+export const naturalEase: EasingCore['naturalEase'] = core.naturalEase;
 export const resolveEase: EasingCore['resolveEase'] = core.resolveEase;
 export const peakSlope: EasingCore['peakSlope'] = core.peakSlope;
 export const MAX_PEAK_VH_PER_SEC: number = core.MAX_PEAK_VH_PER_SEC;

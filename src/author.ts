@@ -54,7 +54,7 @@ export async function author(
       try { msg = JSON.parse(p.payload); } catch { return; }
       if (msg.type === 'picker:picked') {
         const ev = msg.data as PickedEvent;
-        const step: Step = { type: 'move', to: ev.anchor, ease: 'inOutCubic' };
+        const step: Step = { type: 'move', to: ev.anchor, ease: 'natural' };
         steps.push(step);
         cb.onPicked?.(step, ev);
       }

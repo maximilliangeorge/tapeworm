@@ -391,7 +391,7 @@ function buildGeometry(steps) {
     } else if (step.type === 'move') {
       const target = safeResolve(step.to);
       if (target == null) { errors.push({ index: i, anchor: step.to }); continue; }
-      const easeFn = E.resolveEase(step.ease);
+      const easeFn = E.resolveEase(step.ease, Math.abs(target - y) / settings.height);
       const duration = step.duration != null
         ? step.duration
         : E.autoDuration(target - y, settings.height, easeFn);

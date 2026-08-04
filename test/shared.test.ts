@@ -67,6 +67,7 @@ test('Node imports the very same implementation the page runs', async () => {
   const w = bootShared();
   for (const t of [0.1, 0.33, 0.5, 0.77, 0.9]) {
     assert.equal(easing.resolveEase('inOutQuint')(t), w.TapewormEasing.resolveEase('inOutQuint')(t));
+    assert.equal(easing.resolveEase('natural', 3.2)(t), w.TapewormEasing.resolveEase('natural', 3.2)(t));
   }
   assert.equal(easing.MAX_PEAK_VH_PER_SEC, w.TapewormEasing.MAX_PEAK_VH_PER_SEC);
 });

@@ -26,6 +26,12 @@ export type Anchor =
 
 export type EaseName =
   | 'linear'
+  /**
+   * A flick-scroll: brief ramp to peak velocity, then exponential friction
+   * decay. The only curve whose shape derives from the scroll distance —
+   * longer scrolls get a shorter attack and a longer inertial tail.
+   */
+  | 'natural'
   | 'inOutSine' | 'inOutQuad' | 'inOutCubic' | 'inOutQuart' | 'inOutQuint' | 'inOutExpo'
   | 'outSine' | 'outQuad' | 'outCubic' | 'outQuart' | 'outQuint' | 'outExpo';
 
@@ -43,7 +49,7 @@ export type Segment = {
   at?: Anchor;
   /** Seconds of travel. Omitted = derived from distance (see timeline.ts). */
   duration?: number;
-  /** Default 'inOutCubic'. */
+  /** Default 'natural'. */
   ease?: Ease;
   /** Seconds to dwell after arriving. Default 0.8 on the first and last, else 0.6. */
   hold?: number;

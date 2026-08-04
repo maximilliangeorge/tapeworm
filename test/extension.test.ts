@@ -117,7 +117,7 @@ test('overlay preview geometry matches the renderer: same hold defaults and auto
     { type: 'hold', seconds: 0.5 },
     { type: 'move', to: 'bottom' },                            // last: default hold 0.8, auto duration
   ];
-  const auto = E.autoDuration(4000 - 2000, 800, E.resolveEase(undefined));
+  const auto = E.autoDuration(4000 - 2000, 800, E.resolveEase(undefined, (4000 - 2000) / 800));
   const { total, errors } = O.duration(steps);
   assert.equal(errors.length, 0);
   assert.ok(Math.abs(total - (1 + 2 + 0.6 + 0.5 + auto + 0.8)) < 1e-9, `total ${total}`);

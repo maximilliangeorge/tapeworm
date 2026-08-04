@@ -9,6 +9,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `"ease": "natural"` — a flick-scroll easing modelled on momentum physics: a
+  brief ramp to peak velocity, then exponential friction decay. Its shape
+  derives from the scroll distance — longer scrolls get a quicker attack and a
+  longer inertial tail. It is the new default easing (for configs that omit
+  `ease`, auto mode, and newly authored steps — previously `inOutCubic`); all
+  existing named easings remain available and unchanged.
+
 - `tapeworm author <url>` — visual authoring in a headful Chrome that IS the
   render environment (same flags, emulated viewport, injected runtime, pre-warm).
   Click elements to build a timeline; export with `--out config.json`.

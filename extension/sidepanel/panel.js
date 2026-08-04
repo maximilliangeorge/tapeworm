@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const EASES = ['linear', ...Object.keys(globalThis.TapewormEasing.NAMED)];
+const EASES = ['linear', 'natural', ...Object.keys(globalThis.TapewormEasing.NAMED)];
 const $ = (id) => document.getElementById(id);
 
 let tabId = null;
@@ -68,7 +68,7 @@ function onPicked(d) {
     setPicking(null); // interactions arm for ONE pick — back to normal after
     send('picker:stop');
   } else {
-    state.steps.push({ type: 'move', to: d.anchor, ease: 'inOutCubic', _quality: d.quality });
+    state.steps.push({ type: 'move', to: d.anchor, ease: 'natural', _quality: d.quality });
   }
   saveState();
   renderSteps();
@@ -181,7 +181,7 @@ function renderSteps() {
         field('align', align),
         field('offset px', offset),
         field('duration s (auto)', numInput(step.duration, '', (v) => { step.duration = v == null ? undefined : v; commit(); })),
-        field('ease', selectInput(EASES, step.ease || 'inOutCubic', (v) => { step.ease = v; commit(); })),
+        field('ease', selectInput(EASES, step.ease || 'natural', (v) => { step.ease = v; commit(); })),
         field('hold s', numInput(step.hold, '', (v) => { step.hold = v == null ? undefined : v; commit(); })),
       ));
     } else if (step.type === 'click' || step.type === 'hover') {

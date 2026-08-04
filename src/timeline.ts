@@ -54,7 +54,7 @@ export async function autoTimeline(session: Session, maxSections: number): Promi
     // Nothing section-like found — fall back to a single sweep to the bottom.
     return [
       { type: 'start', at: 'top', hold: 1.0 },
-      { type: 'move', to: 'bottom', ease: 'inOutCubic', hold: 1.4 },
+      { type: 'move', to: 'bottom', hold: 1.4 },
     ];
   }
   const steps: Step[] = [{ type: 'start', at: stops[0], hold: 1.0 }];
@@ -62,7 +62,6 @@ export async function autoTimeline(session: Session, maxSections: number): Promi
     steps.push({
       type: 'move',
       to: stops[i],
-      ease: i === stops.length - 1 ? 'outCubic' : 'inOutCubic',
       hold: i === stops.length - 1 ? 1.4 : 0.7,
     });
   }
@@ -142,7 +141,7 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
     const target = await resolve(session, step.to);
     const from = y;
     const distance = target - from;
-    const ease = resolveEase(step.ease);
+    const ease = resolveEase(step.ease, Math.abs(distance) / cfg.height);
     const duration = step.duration ?? autoDuration(distance, cfg.height, ease);
     const frames = Math.max(1, Math.round(duration * cfg.fps));
 

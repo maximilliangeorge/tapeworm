@@ -70,14 +70,56 @@ const NAMED = {
 };
 
 /**
- * The default. Not inOutQuint, which is the prettiest curve on paper but peaks at
- * ~5.9x its average velocity — over a full viewport that either strobes or forces
- * an uncomfortably long segment. inOutCubic peaks at ~2.9x and reads as smooth.
+ * The default. 'natural' (below) is the only distance-aware curve, so it stays
+ * balanced from short hops to full-page transits without hand-picking a bezier
+ * per segment. Historical note for anyone reaching for a fixed curve instead:
+ * inOutQuint is the prettiest on paper but peaks at ~5.9x its average velocity —
+ * over a full viewport that either strobes or forces an uncomfortably long
+ * segment; inOutCubic (~2.9x, the previous default) reads as smooth.
  */
-const DEFAULT_EASE = 'inOutCubic';
+const DEFAULT_EASE = 'natural';
 
-function resolveEase(ease) {
-  if (!ease) return cubicBezier(...NAMED[DEFAULT_EASE]);
+/**
+ * 'natural': a flick-scroll, modelled on its velocity rather than picked from a
+ * bezier catalogue — a brief linear ramp to peak velocity (the flick), then
+ * exponential friction decay (the glide), which is how momentum scrolling
+ * actually moves. Both phases integrate in closed form, so the position curve is
+ * exact, and velocity is >= 0 throughout, so it obeys the no-overshoot rule for
+ * every parameter choice. The glide velocity is shifted so it reaches exactly 0
+ * at t=1 — a raw exponential still carries e^-k of its peak at arrival, which
+ * reads as clipping the landing.
+ *
+ * The shape derives from distance (in viewport heights): longer scrolls get a
+ * proportionally shorter attack and a slower-shedding, longer tail — more
+ * inertia — while short hops stay close to a gentle out-curve. outExpo is this
+ * family's degenerate end (zero attack, k ≈ 6.9), which is the sanity check
+ * that the model is the right one.
+ */
+function naturalEase(distanceVh) {
+  const vh = clamp(Number.isFinite(distanceVh) && distanceVh > 0 ? distanceVh : 1, 0.01, 40);
+  // Attack fraction: roughly constant in real time, so as auto-duration grows
+  // with distance the attack shrinks as a fraction of the segment.
+  const a = clamp(0.25 / (1 + vh), 0.06, 0.25);
+  // Decay rate: higher = velocity sheds fast then creeps to rest = longer tail.
+  const k = clamp(3 + 1.4 * Math.log(1 + vh), 3, 6.5);
+  const ek = Math.exp(-k);
+  // Distance covered through glide progress s (0..1), for unit peak velocity,
+  // normalised so glide velocity is (e^(-ks) - e^(-k)) / (1 - e^(-k)).
+  const glide = (s) => ((1 - Math.exp(-k * s)) / k - s * ek) / (1 - ek);
+  const total = a / 2 + (1 - a) * glide(1);
+  const fn = (t) => {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    const raw = t < a ? (t * t) / (2 * a) : a / 2 + (1 - a) * glide((t - a) / (1 - a));
+    return raw / total;
+  };
+  // Marker for autoDuration: front-loaded curves need more time on short hops.
+  fn.isNatural = true;
+  return fn;
+}
+
+function resolveEase(ease, distanceVh) {
+  if (!ease || ease === 'natural') return naturalEase(distanceVh);
   if (Array.isArray(ease)) {
     if (ease.length !== 4 || ease.some((n) => typeof n !== 'number' || !Number.isFinite(n))) {
       throw new Error(`ease must be [x1,y1,x2,y2], got ${JSON.stringify(ease)}`);
@@ -87,7 +129,7 @@ function resolveEase(ease) {
   if (ease === 'linear') return (t) => t;
   const v = NAMED[ease];
   if (!v) {
-    throw new Error(`unknown ease "${ease}". Known: linear, ${Object.keys(NAMED).join(', ')}`);
+    throw new Error(`unknown ease "${ease}". Known: linear, natural, ${Object.keys(NAMED).join(', ')}`);
   }
   return cubicBezier(...v);
 }
@@ -119,12 +161,17 @@ const MAX_PEAK_VH_PER_SEC = 2.2;
 /**
  * Duration from distance: sub-linear so short hops feel snappy and long transits
  * don't drag, then stretched if needed to keep peak velocity under the cap.
+ *
+ * The 0.9 coefficient is tuned for in-out curves, which spread their speed
+ * around the middle. The natural curve spends its speed in the opening stretch
+ * and then glides, so the same duration reads rushed on short hops (long
+ * transits are velocity-cap dominated either way) — it gets a gentler 1.2.
  */
 function autoDuration(distancePx, viewportPx, ease) {
   const d = Math.abs(distancePx);
   if (d < 1) return 0;
   const vh = d / viewportPx;
-  const feel = 0.9 * Math.pow(vh, 0.6);
+  const feel = (ease.isNatural ? 1.2 : 0.9) * Math.pow(vh, 0.6);
   // peak_velocity = peakSlope * distance / duration  =>  duration >= peakSlope * vh / cap
   const forVelocityCap = (peakSlope(ease) * vh) / MAX_PEAK_VH_PER_SEC;
   return clamp(Math.max(feel, forVelocityCap), 0.35, 6);
@@ -143,6 +190,7 @@ globalThis.TapewormEasing = {
   cubicBezier,
   NAMED,
   DEFAULT_EASE,
+  naturalEase,
   resolveEase,
   peakSlope,
   MAX_PEAK_VH_PER_SEC,

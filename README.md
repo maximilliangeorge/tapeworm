@@ -117,7 +117,7 @@ Timeline entries can also be written as typed steps, and the two forms mix freel
 
 Omit `duration` and it's derived from the distance — sub-linear, so short hops feel snappy and long transits don't drag — then stretched if needed to keep peak velocity under a readable limit.
 
-That cap is the part worth understanding. `inOutQuint` looks like the prettiest curve on paper, but it peaks at **5.9×** its average velocity; over a full viewport it either strobes or forces an uncomfortably long segment. The default is `inOutCubic` (peak 2.9×). Set `ease` explicitly if you disagree — the tool will warn if the result exceeds what reads as smooth motion, and let you do it anyway.
+That cap is the part worth understanding. `inOutQuint` looks like the prettiest curve on paper, but it peaks at **5.9×** its average velocity; over a full viewport it either strobes or forces an uncomfortably long segment. `inOutCubic` (peak 2.9×) reads as smooth. The default is `natural` (below), which sidesteps the choice by deriving its shape from the distance. Set `ease` explicitly if you disagree — the tool will warn if the result exceeds what reads as smooth motion, and let you do it anyway.
 
 ```
 linear 1.0 · inOutSine 1.6 · inOutQuad 1.8 · inOutCubic 2.9 · inOutQuart 4.2 · inOutQuint 5.9 · inOutExpo 7.7
@@ -125,6 +125,8 @@ outCubic 3.0 · outQuint 4.5 · outExpo 6.2
 ```
 
 You can also give a raw CSS cubic-bezier: `"ease": [0.65, 0, 0.35, 1]`.
+
+**`"ease": "natural"`** — the default — imitates a real flick-scroll, and is the one curve that isn't a fixed shape: it's modelled on velocity — a brief ramp to peak speed (the flick), then exponential friction decay (the glide), which is how momentum scrolling actually moves. Its shape derives from the scroll distance: short hops read close to a gentle out-curve, while longer scrolls get a proportionally quicker attack and a longer inertial tail — at 8 viewports, over half the segment is spent gliding through the last 5% of the distance. (`outExpo` is this family's fixed end point: zero attack, maximum decay.) Being tail-heavy, its peak velocity is high for its average — like `outExpo`, expect longer auto-derived durations than `inOutCubic` for the same distance, and the same strobe warning if you force a short one.
 
 Two rules the curve set deliberately enforces:
 
