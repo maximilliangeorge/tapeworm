@@ -11,6 +11,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts'",
     "tapeworm": "node bin/tapeworm.ts"
   },
   "files": [
