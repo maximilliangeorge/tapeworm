@@ -37,4 +37,8 @@ Details that look wrong but are deliberate:
 - `prewarm` modes `cache`/`none` force `--jobs 1` because reveal state depends on the scroll path taken, not just position.
 - Videos are seeked per frame and awaited via `requestVideoFrameCallback`; each animation gets a "birth time" so mid-render starts don't snap to completion.
 
+## Changelog
+
+CHANGELOG.md follows Keep a Changelog. Add user-visible changes (features, fixes, behaviour changes — not refactors or doc tweaks) to the `[Unreleased]` section in the same commit; on release, that section becomes the new version heading.
+
 The README is unusually thorough on behaviour (intro handling, prewarm modes, easing velocity caps, output codecs, failure modes) — read the relevant section before changing that behaviour, and keep it accurate when you do.
