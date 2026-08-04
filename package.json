@@ -1,17 +1,17 @@
 {
-  "name": "scrollrec",
+  "name": "tapeworm",
   "version": "0.1.0",
   "description": "Record website scrollthroughs as high-quality video, with keyframed easing.",
   "type": "module",
   "bin": {
-    "scrollrec": "./bin/scrollrec.ts"
+    "tapeworm": "./bin/tapeworm.ts"
   },
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "scrollrec": "node bin/scrollrec.ts"
+    "tapeworm": "node bin/tapeworm.ts"
   },
   "files": [
     "bin",

@@ -122,7 +122,7 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   const jobs = Math.max(1, Math.min(cfg.jobs, Math.ceil(total / 15)));
   mkdirSync(dirname(cfg.outPath) || '.', { recursive: true });
 
-  const tmp = join(tmpdir(), `scrollrec-${process.pid}`);
+  const tmp = join(tmpdir(), `tapeworm-${process.pid}`);
   mkdirSync(tmp, { recursive: true });
 
   const workers: Worker[] = [lead];

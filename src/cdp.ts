@@ -125,7 +125,7 @@ export function connect(executable: string, args: string[]): Connection {
   const proc = spawn(executable, ['--remote-debugging-pipe', ...args], {
     stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
   });
-  if (process.env.SCROLLREC_DEBUG) {
+  if (process.env.TAPEWORM_DEBUG) {
     proc.stderr?.on('data', (d: Buffer) => process.stderr.write('[chrome] ' + d.toString()));
   } else {
     proc.stderr?.resume(); // drain, or the pipe fills and Chrome blocks

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * scrollrec — record a website scrollthrough as video.
+ * tapeworm — record a website scrollthrough as video.
  *
- *   scrollrec site.json
- *   scrollrec https://example.com --out demo.mp4
+ *   tapeworm site.json
+ *   tapeworm https://example.com --out demo.mp4
  */
 
 import { statSync } from 'node:fs';
@@ -14,11 +14,11 @@ import { checkFfmpeg } from '../src/encode.ts';
 import { render } from '../src/render.ts';
 import type { Config, VideoMode } from '../src/types.ts';
 
-const HELP = `scrollrec — record a website scrollthrough as video
+const HELP = `tapeworm — record a website scrollthrough as video
 
 USAGE
-  scrollrec <config.json> [options]
-  scrollrec <url> [options]              # auto-discovers sections
+  tapeworm <config.json> [options]
+  tapeworm <url> [options]              # auto-discovers sections
 
 OPTIONS
   -o, --out <path>       output file; extension picks the codec
@@ -51,10 +51,10 @@ OPTIONS
   -h, --help
 
 EXAMPLES
-  scrollrec https://stripe.com --out stripe.mp4
-  scrollrec site.json --dpr 3 --out master.mov
-  scrollrec site.json --dry-run
-  scrollrec https://example.com --reveals --out reveals.mp4
+  tapeworm https://stripe.com --out stripe.mp4
+  tapeworm site.json --dpr 3 --out master.mov
+  tapeworm site.json --dry-run
+  tapeworm https://example.com --reveals --out reveals.mp4
 `;
 
 type Flags = Record<string, string | boolean>;
@@ -85,7 +85,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
 }
 
 function fail(msg: string): never {
-  process.stderr.write(`\nscrollrec: ${msg}\n\n`);
+  process.stderr.write(`\ntapeworm: ${msg}\n\n`);
   process.exit(1);
 }
 

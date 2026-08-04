@@ -52,8 +52,8 @@ export function findChrome(explicit?: string | null): string {
     if (!existsSync(explicit)) throw new Error(`chromePath does not exist: ${explicit}`);
     return explicit;
   }
-  if (process.env.SCROLLREC_CHROME && existsSync(process.env.SCROLLREC_CHROME)) {
-    return process.env.SCROLLREC_CHROME;
+  if (process.env.TAPEWORM_CHROME && existsSync(process.env.TAPEWORM_CHROME)) {
+    return process.env.TAPEWORM_CHROME;
   }
   if (process.env.CHROME_PATH && existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH;
 
@@ -66,7 +66,7 @@ export function findChrome(explicit?: string | null): string {
   throw new Error(
     'No Chrome found. Install one with:\n' +
       '  npx @puppeteer/browsers install chrome@stable\n' +
-      'or point at an existing binary with --chrome-path / $SCROLLREC_CHROME.',
+      'or point at an existing binary with --chrome-path / $TAPEWORM_CHROME.',
   );
 }
 

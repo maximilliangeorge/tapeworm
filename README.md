@@ -1,12 +1,12 @@
-# scrollrec
+# tapeworm
 
 Record website scrollthroughs as high-quality video, with keyframed scrolling and easing curves.
 
 Frames are rendered one at a time rather than screen-captured in real time, which means the motion is exactly the curve you authored, the output is retina and lossless-sourced, and **playing video on the page lands on the right frame** instead of drifting.
 
 ```bash
-scrollrec https://stripe.com --out stripe.mp4
-scrollrec site.json --dpr 3 --out master.mov
+tapeworm https://stripe.com --out stripe.mp4
+tapeworm site.json --dpr 3 --out master.mov
 ```
 
 TypeScript, run directly — no build step, no dependencies.
@@ -23,8 +23,8 @@ TypeScript, run directly — no build step, no dependencies.
   ```
 
 ```bash
-git clone <this repo> && cd scrollrec
-node bin/scrollrec.ts --help
+git clone <this repo> && cd tapeworm
+node bin/tapeworm.ts --help
 ```
 
 There is nothing to install and nothing to compile. `npm install` is only needed if you want editor typechecking (`@types/node`).
@@ -36,7 +36,7 @@ There is nothing to install and nothing to compile. `npm install` is only needed
 **Point it at a URL.** It discovers sections, builds a timeline, and marches through them:
 
 ```bash
-scrollrec https://linear.app --out linear.mp4
+tapeworm https://linear.app --out linear.mp4
 ```
 
 **Write a config** when you want control:
@@ -141,9 +141,9 @@ Two different things get called "an intro", and they need opposite treatment.
 `--no-unlock-intro` disables it. If a page hijacks scrolling permanently (never becomes natively scrollable), you'll get a note saying so rather than a silent one-frame video.
 
 ```bash
-scrollrec https://example.com --out out.mp4                  # skip the intro (default)
-scrollrec https://example.com --replay-intro --out out.mp4    # film the intro
-scrollrec https://example.com --wait-for-intro 15000          # a slow one
+tapeworm https://example.com --out out.mp4                  # skip the intro (default)
+tapeworm https://example.com --replay-intro --out out.mp4    # film the intro
+tapeworm https://example.com --wait-for-intro 15000          # a slow one
 ```
 
 If a time-based intro is driven by JS that never registers a WAAPI animation, the poll can't see it — add a fixed `--settle 4000` on top.
@@ -161,7 +161,7 @@ Whether reveals appear *in* the video is a real choice, and `--prewarm` is where
 | `none` | Film a cold page. | You specifically want to show real network behaviour. |
 
 ```bash
-scrollrec https://example.com --reveals --out reveals.mp4
+tapeworm https://example.com --reveals --out reveals.mp4
 ```
 
 Two things make `cache` work, and they're worth knowing because they're where the naive version fails:
@@ -206,7 +206,7 @@ Frames come out of Chrome as lossless PNG, so the encode is the only lossy step.
 Every time-dependent thing is seeked rather than read from the wall clock, so frame *N* doesn't depend on frame *N−1* having been rendered. That makes the frame range shardable across parallel browsers, which is where the speed comes from:
 
 ```bash
-scrollrec site.json --jobs 8
+tapeworm site.json --jobs 8
 ```
 
 Default is `min(4, cores-1)`. Each shard renders a contiguous range into its own segment; segments are concatenated without re-encoding. More jobs means more memory and more pre-warms, so past about 8 you're usually trading.
@@ -257,7 +257,7 @@ Default is `min(4, cores-1)`. Each shard renders a contiguous range into its own
 
 **A page breaks with the virtual clock** — `--clock real`. You lose deterministic JS animation timing but keep everything else, including video seeking.
 
-Set `SCROLLREC_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
+Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
 
 ---
 
@@ -275,7 +275,7 @@ Set `SCROLLREC_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work
 ## Layout
 
 ```
-bin/scrollrec.ts   CLI: arg parsing, progress, output
+bin/tapeworm.ts   CLI: arg parsing, progress, output
 src/types.ts       config schema — the source of truth for what's configurable
 src/config.ts      defaults + validation
 src/cdp.ts         minimal CDP client over --remote-debugging-pipe (no deps)
