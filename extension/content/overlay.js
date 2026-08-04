@@ -342,6 +342,16 @@ function setPreviewHover(anchor) {
   }
 }
 
+/** Synthetic click on the step's target — down, up, click, at its centre. */
+function firePreviewClick(target) {
+  let el = null;
+  try { el = document.querySelectorAll(target.selector)[target.nth || 0] || null; } catch (e) {}
+  if (!el) return;
+  fireMouse(el, 'mousedown');
+  fireMouse(el, 'mouseup');
+  fireMouse(el, 'click');
+}
+
 /** What should be hovered at time t: the last hover before t, ended by any later interaction. */
 function hoverAnchorAt(geo, t) {
   let current = null;
@@ -361,6 +371,7 @@ function hoverAnchorAt(geo, t) {
 function buildGeometry(steps) {
   const segs = [];   // { t0, t1, from, to, easeFn } — holds are from===to
   const pointerEvents = []; // { t, anchor|null } — hover starts / hover-ending interactions
+  const clicks = []; // { t, target } — fired once as playback crosses them
   let t = 0;
   let y = 0;
   const errors = [];
@@ -391,19 +402,20 @@ function buildGeometry(steps) {
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
       if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null }); t += hold; }
     } else if (step.type === 'click' || step.type === 'hover') {
-      // Clicks can't happen in the preview (no trusted input, and they'd
-      // mutate page state scrubbing couldn't undo) — but their settle time
-      // must still pass or every later timestamp would disagree with the
-      // render. Hovers ARE emulated (see setPreviewHover); a later
-      // interaction moves the pointer and ends them, matching the render.
+      // Both are emulated in the preview with synthetic (untrusted) events —
+      // hovers continuously via setPreviewHover, clicks once as playback
+      // crosses them. A click's effects persist on the page (a preview can't
+      // un-open a menu); reloading the page is the reset. Settle time passes
+      // either way so timestamps agree with the render.
       pointerEvents.push({ t, anchor: step.type === 'hover' ? step.target : null });
+      if (step.type === 'click') clicks.push({ t, target: step.target });
       const settle = step.settle != null ? step.settle : 0.6;
       segs.push({ t0: t, t1: t + settle, from: y, to: y, easeFn: null });
       t += settle;
     }
     // wait: not executable yet — previewed as nothing, same as render
   }
-  return { segments: segs, total: t, errors, pointerEvents };
+  return { segments: segs, total: t, errors, pointerEvents, clicks };
 }
 
 function offsetAt(geo, tSec) {
@@ -423,12 +435,17 @@ function play(steps) {
   stopPreview(true);
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
-  preview = { geo, startWall: performance.now(), offsetSec: 0, playing: true, raf: 0 };
+  preview = { geo, startWall: performance.now(), offsetSec: 0, playing: true, raf: 0, fired: new Set() };
   if (els.shield) els.shield.style.display = 'block';
   const tick = () => {
     if (!preview || !preview.playing) return;
     const t = preview.offsetSec + (performance.now() - preview.startWall) / 1000;
     A.setScroll(offsetAt(preview.geo, t));
+    // clicks fire once as playback crosses them — never on scrub, where a
+    // back-and-forth would toggle menus open and shut
+    preview.geo.clicks.forEach((c, i) => {
+      if (c.t <= t && !preview.fired.has(i)) { preview.fired.add(i); firePreviewClick(c.target); }
+    });
     setPreviewHover(hoverAnchorAt(preview.geo, t));
     emit('preview:time', { t, total: preview.geo.total });
     if (t >= preview.geo.total) {
