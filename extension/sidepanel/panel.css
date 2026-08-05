@@ -118,6 +118,15 @@ ol#steps { list-style: none; display: flex; flex-direction: column; gap: 5px; pa
 li.step { border: 1px solid var(--line-soft); border-radius: 7px; background: var(--card); }
 li.step.open { border-color: var(--accent); }
 li.step .row1 { display: flex; align-items: center; gap: 7px; padding: 7px 9px; cursor: pointer; }
+li.step .grip { flex: 0 0 auto; font-size: 10px; color: var(--muted); cursor: grab;
+                user-select: none; touch-action: none; margin: -7px -4px; padding: 7px 4px; }
+li.step .grip.off { visibility: hidden; }
+li.step.dragging { opacity: 0.45; }
+/* drop target: no ink — the rows part to open the slot the step will land in */
+li.step { transition: margin 140ms ease; }
+li.step.drop-before { margin-top: 9px; }
+li.step.drop-after { margin-bottom: 9px; }
+@media (prefers-reduced-motion: reduce) { li.step { transition: none; } }
 li.step .idx { font-family: var(--mono); font-size: 9.5px; color: var(--muted); width: 14px;
                flex: 0 0 auto; }
 li.step .sel { font-family: var(--mono); font-size: 11px; flex: 1; overflow: hidden;

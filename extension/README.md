@@ -50,7 +50,8 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    trusted input from a content script, and they'd mutate page state that
    scrubbing couldn't undo — but their settle time still counts.
 5. Steps collapse to one line — selector, quality, a drawn easing curve, and
-   the seconds the step occupies. Click a row to open its editor
+   the seconds the step occupies. Drag the ⠿ grip to reorder (the start step
+   stays pinned first). Click a row to open its editor
    (align / offset / duration / ease / hold, reorder, ⌖ jump-to-element).
 6. The **duration ruler** above the steps shows the whole timeline to scale —
    moves solid, holds striped, interactions as markers — so pacing problems are

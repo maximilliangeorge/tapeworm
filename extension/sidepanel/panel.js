@@ -311,6 +311,29 @@ function renderSteps() {
     li.className = 'step' + (expandedIndex === i ? ' open' : '');
 
     const row1 = div('row1');
+    // The start step is pinned first — it gets a blank grip purely for column
+    // alignment. Rows are only draggable while the pointer is on the grip, so
+    // text selection and row-click-to-expand keep working everywhere else.
+    const grip = span('grip' + (i === 0 ? ' off' : ''), '⠿');
+    if (i > 0) {
+      grip.title = 'Drag to reorder';
+      grip.addEventListener('click', (ev) => ev.stopPropagation());
+      grip.addEventListener('pointerdown', () => { li.draggable = true; });
+      grip.addEventListener('pointerup', () => { li.draggable = false; });
+      li.addEventListener('dragstart', (ev) => {
+        dragIndex = i;
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', String(i));
+        li.classList.add('dragging');
+      });
+      li.addEventListener('dragend', () => {
+        li.draggable = false;
+        li.classList.remove('dragging');
+        dragIndex = null;
+        clearDropMarks();
+      });
+    }
+    row1.append(grip);
     row1.append(span('idx', step.type === 'start' ? 'S' : String(i)));
 
     if (step.type === 'start') {
@@ -439,6 +462,57 @@ function renderSteps() {
     commit();
   }
 }
+
+// ---------------------------------------------------------------- drag to reorder
+let dragIndex = null; // index of the step being dragged, null when idle
+
+/** Move a step so it lands at `insertAt` (an index into the pre-removal array). */
+function moveStep(from, insertAt) {
+  insertAt = Math.max(1, Math.min(insertAt, state.steps.length)); // never before start
+  if (insertAt === from || insertAt === from + 1) return; // dropped where it already sits
+  const expanded = expandedIndex != null ? state.steps[expandedIndex] : null;
+  const [step] = state.steps.splice(from, 1);
+  state.steps.splice(insertAt > from ? insertAt - 1 : insertAt, 0, step);
+  expandedIndex = expanded ? state.steps.indexOf(expanded) : null;
+  commit();
+}
+
+function clearDropMarks() {
+  for (const el of $('steps').querySelectorAll('.drop-before, .drop-after')) {
+    el.classList.remove('drop-before', 'drop-after');
+  }
+}
+
+/** Insertion index for a drop at this pointer position: before the first row
+ *  whose midpoint the cursor is above, clamped past the pinned start step. */
+function dropIndexFrom(ev) {
+  const rows = [...$('steps').children];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i].getBoundingClientRect();
+    if (ev.clientY < r.top + r.height / 2) return Math.max(1, i);
+  }
+  return rows.length;
+}
+
+$('steps').addEventListener('dragover', (ev) => {
+  if (dragIndex == null) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = 'move';
+  const at = dropIndexFrom(ev);
+  clearDropMarks();
+  const rows = $('steps').children;
+  if (at < rows.length) rows[at].classList.add('drop-before');
+  else if (rows.length) rows[rows.length - 1].classList.add('drop-after');
+});
+
+$('steps').addEventListener('drop', (ev) => {
+  if (dragIndex == null) return;
+  ev.preventDefault();
+  const from = dragIndex;
+  dragIndex = null;
+  clearDropMarks();
+  moveStep(from, dropIndexFrom(ev));
+});
 
 function commit() {
   saveState();

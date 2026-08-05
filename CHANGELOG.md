@@ -9,6 +9,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Extension: timeline steps can be **dragged to reorder** via a ⠿ grip on each
+  row — the rows part to show where the step will land. The start step stays
+  pinned first. The ↑/↓ buttons in the step editor remain.
+
 - The extension now pins its identity with a `key` in the manifest, so every
   unpacked install shares one extension ID
   (`bclflmcbfiplaghcgcnclooakcopnekb`) regardless of where the repo is cloned.
