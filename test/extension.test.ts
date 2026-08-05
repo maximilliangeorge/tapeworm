@@ -109,6 +109,8 @@ function bootOverlay(opts: { maxScroll?: number; queries?: Record<string, unknow
     performance: { now: () => now },
     scrollTo: ({ top }: { top: number }) => { window.scrollY = top; },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    MouseEvent: class { type: string; constructor(type: string, init: object) { this.type = type; Object.assign(this, init); } },
+    PointerEvent: class { type: string; constructor(type: string, init: object) { this.type = type; Object.assign(this, init); } },
     document: {
       title: 'Example',
       documentElement: Object.assign(fakeEl(), { scrollHeight: docHeight }),
@@ -352,6 +354,57 @@ test('preview emulates hover under the recorded pointer, and a recording ends ea
   O.seek(steps, 4.4); // in the trailing hold: the render parks the pointer here
   assert.ok(!boxClasses.has('__tw-hover'), 'nothing hovered after the recording');
   assert.ok(!menuClasses.has('__tw-hover'), 'the earlier hover does not come back either');
+});
+
+test('recorded hover raises the events a real pointer would: pointer + mouse, chain-walked, at the pointer', () => {
+  const fired: string[] = [];
+  const noClasses = { add: () => {}, remove: () => {} };
+  const parent: any = {
+    nodeType: 1,
+    parentElement: null,
+    classList: noClasses,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 100 }),
+    dispatchEvent: (e: any) => fired.push('parent:' + e.type),
+  };
+  const box: any = {
+    nodeType: 1,
+    parentElement: parent,
+    classList: noClasses,
+    getBoundingClientRect: () => ({ left: 150, top: 30, width: 100, height: 40 }),
+    dispatchEvent: (e: any) => fired.push('box:' + e.type + '@' + Math.round(e.clientX) +
+      (e.relatedTarget === parent ? '(rel:parent)' : '')),
+  };
+  const w = bootOverlay();
+  w.document.elementFromPoint = (x: number) => (x >= 150 ? box : null);
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+  const steps = [{ type: 'start', at: 'top', hold: 1 }, GEO_REC]; // recording spans t=1..3, x 100→300
+
+  O.seek(steps, 2.0); // 1s in: pointer at x=200 enters the box
+  assert.ok(fired.includes('box:pointerover@200'), 'pointerover, at the recorded position: ' + fired);
+  assert.ok(fired.includes('box:mouseover@200'));
+  assert.deepEqual(
+    fired.filter((f) => f.includes('pointerenter')),
+    ['parent:pointerenter', 'box:pointerenter@200'],
+    'enter walks the chain outermost-first',
+  );
+  assert.ok(fired.includes('box:pointermove@200') && fired.includes('box:mousemove@200'));
+
+  fired.length = 0;
+  O.seek(steps, 2.5); // still over the box at x=250: moves keep flowing, no re-enter
+  assert.ok(fired.includes('box:pointermove@250'), 'moves are continuous, at the live position');
+  assert.ok(!fired.some((f) => f.includes('over') || f.includes('enter')), 'no spurious re-enter');
+
+  fired.length = 0;
+  O.seek(steps, 1.2); // back to x=120: off the box
+  assert.ok(fired.includes('box:pointerout@120'));
+  assert.ok(fired.includes('box:mouseout@120'));
+  assert.deepEqual(
+    fired.filter((f) => f.includes('pointerleave')),
+    ['box:pointerleave@120', 'parent:pointerleave'],
+    'leave walks the chain innermost-first',
+  );
 });
 
 test('overlay reports whether the window IS the render viewport — never a scaled stand-in', () => {

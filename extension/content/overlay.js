@@ -434,17 +434,49 @@ function ensureHoverRules() {
   document.documentElement.appendChild(hoverRulesEl);
 }
 
-function fireMouse(el, type, bubbles) {
+/**
+ * Dispatch one synthetic event the way a real pointer would raise it:
+ * pointer* types go out as PointerEvents (what modern listeners subscribe
+ * to), over/out carry relatedTarget, enter/leave don't bubble, and the
+ * coordinates are the actual pointer position when the caller knows it
+ * (element centre otherwise). Untrusted either way — isTrusted-gated
+ * libraries only respond in the render.
+ */
+function fireMouse(el, type, opts) {
+  opts = opts || {};
   try {
-    const r = el.getBoundingClientRect();
-    el.dispatchEvent(new MouseEvent(type, {
-      bubbles: bubbles !== false,
+    let x = opts.x, y = opts.y;
+    if (x == null || y == null) {
+      const r = el.getBoundingClientRect();
+      x = r.left + r.width / 2;
+      y = r.top + r.height / 2;
+    }
+    const init = {
+      bubbles: opts.bubbles !== false,
       cancelable: true,
+      composed: true,
       view: window,
-      clientX: r.left + r.width / 2,
-      clientY: r.top + r.height / 2,
-    }));
+      clientX: x,
+      clientY: y,
+      relatedTarget: opts.related || null,
+    };
+    if (type.indexOf('pointer') === 0) {
+      init.pointerId = 1;
+      init.pointerType = 'mouse';
+      init.isPrimary = true;
+      const Ctor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new Ctor(type, init));
+    } else {
+      el.dispatchEvent(new MouseEvent(type, init));
+    }
   } catch (e) {}
+}
+
+/** The element and its ancestors, innermost first. */
+function chainOf(el) {
+  const c = [];
+  for (let n = el; n && n.nodeType === 1; n = n.parentElement) c.push(n);
+  return c;
 }
 
 /** Make `anchor`'s element the hovered one (null = nothing hovered). */
@@ -456,22 +488,44 @@ function setPreviewHover(anchor) {
   setPreviewHoverEl(el);
 }
 
-/** Same, from an element in hand — recordings hit-test rather than select. */
-function setPreviewHoverEl(el) {
+/**
+ * Same, from an element in hand — recordings hit-test rather than select.
+ * Raises the full transition a real pointer move produces: pointerout/mouseout
+ * on the old target, pointerleave/mouseleave up its chain to the common
+ * ancestor, pointerover/mouseover on the new target, pointerenter/mouseenter
+ * down into it (outermost first), then a move at the pointer position.
+ */
+function setPreviewHoverEl(el, x, y) {
   if (el === hoverEl) return;
-  if (hoverEl) {
-    fireMouse(hoverEl, 'mouseout');
-    fireMouse(hoverEl, 'mouseleave', false);
-    for (let n = hoverEl; n && n.classList; n = n.parentElement) n.classList.remove('__tw-hover');
-  }
+  const prev = hoverEl;
+  const prevChain = prev ? chainOf(prev) : [];
+  const nextChain = el ? chainOf(el) : [];
+  const nextSet = new Set(nextChain);
+  const prevSet = new Set(prevChain);
   hoverEl = el;
+  if (prev) {
+    fireMouse(prev, 'pointerout', { related: el, x, y });
+    fireMouse(prev, 'mouseout', { related: el, x, y });
+    for (const n of prevChain) {
+      if (nextSet.has(n)) break; // everything below the common ancestor was left
+      fireMouse(n, 'pointerleave', { bubbles: false, related: el, x, y });
+      fireMouse(n, 'mouseleave', { bubbles: false, related: el, x, y });
+    }
+    for (const n of prevChain) if (n.classList) n.classList.remove('__tw-hover');
+  }
   if (el) {
     ensureHoverRules();
-    fireMouse(el, 'mouseover');
-    fireMouse(el, 'mouseenter', false);
-    fireMouse(el, 'mousemove');
+    fireMouse(el, 'pointerover', { related: prev, x, y });
+    fireMouse(el, 'mouseover', { related: prev, x, y });
+    const entered = nextChain.filter((n) => !prevSet.has(n)).reverse();
+    for (const n of entered) {
+      fireMouse(n, 'pointerenter', { bubbles: false, related: prev, x, y });
+      fireMouse(n, 'mouseenter', { bubbles: false, related: prev, x, y });
+    }
+    fireMouse(el, 'pointermove', { x, y });
+    fireMouse(el, 'mousemove', { x, y });
     // :hover applies to every ancestor of the hovered element too
-    for (let n = el; n && n.classList; n = n.parentElement) n.classList.add('__tw-hover');
+    for (const n of nextChain) if (n.classList) n.classList.add('__tw-hover');
   }
 }
 
@@ -480,7 +534,9 @@ function firePreviewClick(target) {
   let el = null;
   try { el = document.querySelectorAll(target.selector)[target.nth || 0] || null; } catch (e) {}
   if (!el) return;
+  fireMouse(el, 'pointerdown');
   fireMouse(el, 'mousedown');
+  fireMouse(el, 'pointerup');
   fireMouse(el, 'mouseup');
   fireMouse(el, 'click');
 }
@@ -496,18 +552,14 @@ function hoverAnchorAt(geo, t) {
 }
 
 /**
- * What the recorded pointer is over at this point in playback — the element
- * the render's trusted input would hover. undefined when t is outside every
- * record segment (so the hover-step machinery owns hover instead);
- * element-or-null inside one.
+ * Where the recorded pointer is at this point in playback — undefined when t
+ * is outside every record segment (the hover-step machinery owns hover
+ * there), {x, y} inside one.
  */
-function recHoverElementAt(geo, tSec) {
+function recPointerAt(geo, tSec) {
   const t = Math.max(0, Math.min(tSec, geo.total));
   for (const s of geo.segments) {
-    if (s.rec && t >= s.t0 && t <= s.t1) {
-      const p = G.pointerAt(s.rec, t - s.t0);
-      return hitTest(p.x, p.y);
-    }
+    if (s.rec && t >= s.t0 && t <= s.t1) return G.pointerAt(s.rec, t - s.t0);
   }
   return undefined;
 }
@@ -525,9 +577,22 @@ function hitTest(x, y) {
 
 /** During a record segment the recorded pointer owns hover; otherwise the hover steps do. */
 function applyPreviewHover(geo, t) {
-  const recEl = recHoverElementAt(geo, t);
-  if (recEl !== undefined) setPreviewHoverEl(recEl);
-  else setPreviewHover(hoverAnchorAt(geo, t));
+  const p = recPointerAt(geo, t);
+  if (p === undefined) {
+    setPreviewHover(hoverAnchorAt(geo, t));
+    return;
+  }
+  const el = hitTest(p.x, p.y);
+  if (el === hoverEl) {
+    // moves are continuous while the pointer rides an element, not just on
+    // the tick the hovered element changes — tooltips and menus track them
+    if (el) {
+      fireMouse(el, 'pointermove', { x: p.x, y: p.y });
+      fireMouse(el, 'mousemove', { x: p.x, y: p.y });
+    }
+  } else {
+    setPreviewHoverEl(el, p.x, p.y); // fires its own move at the pointer
+  }
 }
 
 // ---------------------------------------------------------------- preview
