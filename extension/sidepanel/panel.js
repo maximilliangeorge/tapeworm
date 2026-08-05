@@ -602,6 +602,19 @@ $('arm-click').addEventListener('click', () => armPicker('click'));
 $('arm-hover').addEventListener('click', () => armPicker('hover'));
 $('arm-record').addEventListener('click', () => armPicker('record'));
 
+// ESC goes to whichever document has FOCUS — and after clicking an arm button
+// that's this panel, not the page. The overlay's own ESC handler only hears
+// keys once the page is focused, which recording never guarantees (clicking
+// the page to focus it would be captured as part of the take). So the panel
+// disarms too: for a recording that finishes and keeps the take, same as ESC
+// on the page.
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && picking) {
+    ev.preventDefault();
+    armPicker(picking); // toggles the armed mode off
+  }
+});
+
 $('fit').addEventListener('click', fitWindow);
 
 $('preset').addEventListener('change', async () => {
