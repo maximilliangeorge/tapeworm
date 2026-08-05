@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Author tapeworm scrollthrough timelines visually: pick keyframes, set timing and easing, preview the motion, export the config.",
   "minimum_chrome_version": "114",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvmmNI8KSzH9zXXLP+rAXTLqg6CIxZn2+ZMMWKEMh0pHbY1X/S3WubBoqAcS5o/bh2kv8bS6noWsOACK6OYj71IeGOpDq1R6+xu+miEs8mkyfMG7bkVpG9yl/RsgOzmCus9mXyaZiOx1ujXsKZnr8MXYAaThPKKaZA8xM2KyXks70iDn0LRT0ElI8ETkUfiJJD06MfbHInKoicu//Hp6e2BnzkVZXoXGd6GLw+f4+aXbco53toAScwlJUgE0/IqfgjP3i+dX4s7bz8BOvEfg/xbl/848m0CHYSbE2lySwFy4ey7WLeYbQcCKkLsICeZX8nDdN/kRtUb1i/ZdRRoVeRQIDAQAB",
   "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
   "icons": {
     "16": "icons/icon16.png",

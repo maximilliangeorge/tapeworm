@@ -19,6 +19,7 @@
     "bin",
     "src",
     "examples",
+    "extension",
     "README.md"
   ],
   "license": "MIT",

@@ -11,6 +11,16 @@ config the renderer runs unchanged.
 2. `chrome://extensions` → Developer mode → **Load unpacked** → pick this
    `extension/` directory. Chrome 114+.
 
+To update, `git pull` and hit ⟳ on the card in `chrome://extensions`.
+
+The manifest carries a `key`, so the extension ID is always
+`bclflmcbfiplaghcgcnclooakcopnekb` no matter where the repo sits on disk —
+allowlists and stored state survive a re-clone. The matching private key is
+`extension-key.pem` at the repo root; it is gitignored, and you only need it to
+pack a `.crx` with that same ID. **Drop the `key` field before uploading to the
+Chrome Web Store** — the store assigns its own key and rejects a manifest whose
+`key` doesn't match the item's.
+
 ## Use it
 
 1. Open the page you want to film and click the Tapeworm toolbar action. This

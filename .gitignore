@@ -3,3 +3,4 @@ node_modules/
 *.mov
 *.png
 !extension/icons/*.png
+*.pem

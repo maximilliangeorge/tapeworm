@@ -9,6 +9,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The extension now pins its identity with a `key` in the manifest, so every
+  unpacked install shares one extension ID
+  (`bclflmcbfiplaghcgcnclooakcopnekb`) regardless of where the repo is cloned.
+  This makes the extension allowlistable and keeps `chrome.storage.session`
+  state stable across re-clones. The extension is also included in the npm
+  package now, so `npm i -g tapeworm` puts a loadable `extension/` on disk.
+
 - `page.substitute` — replace assets during the render by intercepting their
   requests (CDP Fetch domain, the mechanism behind DevTools "local overrides"):
   `{ "from": "<url wildcard>", "to": "<url or local file>" }`. Local files are
