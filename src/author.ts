@@ -59,6 +59,14 @@ export async function author(
         cb.onPicked?.(step, ev);
       }
       if (msg.type === 'picker:stopped') note('picker paused (press p to resume)');
+      if (msg.type === 'record:done') {
+        const d = msg.data;
+        const step: Step = { type: 'record', samples: d.samples, viewport: d.viewport };
+        if (d.buttons?.length) step.buttons = d.buttons;
+        steps.push(step);
+        note(`recorded ${(d.durationMs / 1000).toFixed(1)}s of interaction (${d.samples.t.length} samples)`);
+      }
+      if (msg.type === 'record:cancelled') note('recording cancelled (nothing captured)');
       if (msg.type === 'page:info' && msg.data?.scrollGated) {
         note('this page gates scrolling behind an intro — scroll manually in the window to unlock it');
       }
@@ -73,7 +81,7 @@ export async function author(
       TapewormOverlay.startPicker();
     `);
 
-    note('pick elements in the browser window. p = toggle picker, u = undo last, w = write config, q = quit');
+    note('pick elements in the browser window. p = toggle picker, r = record until ESC, u = undo last, w = write config, q = quit');
 
     await interact(session, steps, note, () => writeConfig(cfg, steps, outPath, note));
   } finally {
@@ -145,6 +153,12 @@ function interact(
         pickerOn = !pickerOn;
         session.eval(`TapewormOverlay.${pickerOn ? 'startPicker' : 'stopPicker'}()`).catch(() => {});
         note(pickerOn ? 'picker on' : 'picker off');
+      }
+      if (k === 'r') {
+        // startRecording stops the picker itself; ESC in the BROWSER window ends it
+        pickerOn = false;
+        session.eval('TapewormOverlay.startRecording()').catch(() => {});
+        note('recording — interact with the page, press ESC in the browser window to stop');
       }
     };
 
