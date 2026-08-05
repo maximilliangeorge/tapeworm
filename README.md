@@ -113,6 +113,28 @@ That covers both kinds of navigation. A document load is spotted with a marker t
 
 **The route transition is content, and it stays in the video.** The waiting above happens only while the plan is built. During capture, a click that routes client-side keeps filming: the transition — exit animation, view swap, entrance animation — plays across the click's settle frames, seeked per frame by the same virtual clock as everything else. Those frames are *free*: the page owns the scroll while the router swaps views (the outgoing view holds the click offset; the router jumps to the top when the new view mounts), so tapeworm imposes no offset and reports no scroll drift there. When the click has no explicit `settle`, the settle is sized to the transition measured during planning (at least the 0.6s default, capped at 4s), so the whole swap fits on camera; if you set a shorter `settle` yourself, the plan warns with a ⚠ that the timeline may take the scroll back mid-transition. A full document load is different — tearing down the document destroys any transition, so there is nothing to film, and the new page is settled and pre-warmed off-camera in both passes.
 
+**Recorded gestures**: a `record` step replays a captured stretch of *your* real interaction — pointer movement, clicks and drags, scrolling — exactly as you performed it. You don't write one by hand; the extension's **● Record** button (or `r` in `tapeworm author`) captures it: interact with the page, press **ESC**, and the whole gesture becomes one step.
+
+```jsonc
+{
+  "type": "record",
+  "samples": { "t": [0, 16, 33, …], "x": [512, 514, 519, …], "y": [300, 301, 303, …], "s": [0, 0, 2, …] },
+  "buttons": [{ "t": 1204, "action": "down" }, { "t": 1287, "action": "up" }],
+  "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "hold": 0.5
+}
+```
+
+`samples` are parallel arrays — one entry per captured frame: `t` ms from the recording's start, `x`/`y` the pointer in viewport CSS px, `s` the scroll offset. `buttons` are the left-button edges. During the render, the recorded scroll becomes the scroll track for those frames, and the pointer is driven per frame through Chrome's real input pipeline — `:hover` states, drags, and clicks all behave as they did live, and anything they animate is seeked by the same birth-time machinery as every other animation. A cursor sprite is drawn into the page so the gesture is visible on camera (`"page": { "cursor": false }` hides it; the input still happens). Like `click`/`hover`, a recording is path-dependent, so it forces sequential rendering (`jobs: 1`).
+
+Three rules keep recordings honest:
+
+- **The viewport is part of the recording.** The step stamps the viewport it was captured at, and a render at any other size is refused — breakpoints make a different size a different page, and scaling coordinates would click the wrong things. Fit the window before recording (the extension pushes you to), or set the config's `viewport` to the recorded size.
+- **Recorded clicks must not navigate.** The rest of the recording belongs to the page that just left, so navigation mid-recording is detected and refused — use a `click` step for the navigation, then record on the destination.
+- **The recording's scroll wins.** If the timeline stands somewhere else when the recording begins, the video cuts to the recording's starting offset — the plan warns with a ⚠ so you can add a `move` to its start first.
+
+The raw samples stay in the config on purpose: the sample-to-frame resolution (currently linear interpolation, in `shared/gesture-core.js`) can grow smoothing later, and existing recordings will simply re-resolve — no re-recording. Expect recorded scroll to be noisier than a `move` on `scroll-snap` pages: the page re-snaps offsets a human scroll passed through, and the drift note will say so.
+
 `wait` remains format-only for now: it parses but is rejected with a clear message until it lands.
 
 ---
@@ -294,11 +316,11 @@ tapeworm <config.json> | <url> | -     # - reads the config from stdin
 
 Hand-writing selectors and guessing holds works, but there are two faster ways to build a timeline.
 
-**`tapeworm author <url>`** opens a headful Chrome with the render's exact flags, emulated viewport, and injected runtime, pre-warms the page the same way a render would, and overlays an element picker. Click elements to add keyframes — each shows its generated selector and an honesty grade (`id` / `data` / `class` / `structural`, the last meaning "works today, breaks on a redesign"). Terminal keys: `p` toggles the picker, `u` undoes the last pick, `w` writes the config, `q` quits (also writes). `--out config.json` names the file; otherwise the JSON goes to stdout.
+**`tapeworm author <url>`** opens a headful Chrome with the render's exact flags, emulated viewport, and injected runtime, pre-warms the page the same way a render would, and overlays an element picker. Click elements to add keyframes — each shows its generated selector and an honesty grade (`id` / `data` / `class` / `structural`, the last meaning "works today, breaks on a redesign"). Terminal keys: `p` toggles the picker, `r` records your interactions until you press ESC in the browser window (they become a `record` step), `u` undoes the last pick, `w` writes the config, `q` quits (also writes). `--out config.json` names the file; otherwise the JSON goes to stdout.
 
 Because author mode *is* the render environment, it's also the tiebreaker: if the browser extension and a render ever disagree about where an anchor lands, what author mode shows is what the render will do.
 
-**The Chrome extension** (in `extension/`, load unpacked via `chrome://extensions`) authors in your everyday browser: click the toolbar action, pick elements on the page, edit timing/easing/holds in the side panel, preview the motion in real time, export the config. Two honesty features matter:
+**The Chrome extension** (in `extension/`, load unpacked via `chrome://extensions`) authors in your everyday browser: click the toolbar action, pick elements on the page, edit timing/easing/holds in the side panel, preview the motion in real time, export the config. **● Record** arms record mode: a banner appears on the page, your pointer movement, clicks and scrolling are captured until you press ESC, and the take lands as one `record` step. (The preview replays a recording's scroll and traces a cursor dot; the hover and drag effects themselves are render-only, where they run as trusted input.) Two honesty features matter:
 
 - The render always captures the **full viewport at the configured size**, and CSS breakpoints mean a page laid out in a different-sized window is a different page. So the extension doesn't draw a pretend frame inside your window — **Fit window** (with viewport presets) resizes the browser window until the page viewport *is* the render viewport, and a badge on the page says ✓ when it matches or warns when it doesn't. Author at the size you'll render at.
 - **Prepare page** steps through the whole page the way the renderer's pre-warm does, so lazy content loads and scroll reveals fire *before* you pick. Skipping it means anchors resolve against un-fired reveal transforms — positions the render will never see. Do it first.
@@ -336,6 +358,7 @@ Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
 - **Inner scroll containers** aren't supported — only the document scroller.
 - **Full-page-section hijackers** (fullPage.js, Webflow page sections) need per-library adapters that don't exist yet.
 - **Cross-origin iframes** are opaque: their animations and video can't be controlled.
+- **Recorded gestures replay only on the layout they were captured on**: a `record` step refuses a different viewport, and a recorded click that navigates is refused (use a `click` step for the navigation).
 - **No motion blur.** The correct approach is supersampling — render at 4–8× the frame rate in sub-frame steps and average — which isn't implemented. It would come free from the existing frame-index model.
 - **No audio.** By design; this is a picture pipeline.
 - **`--dpr` above 3** works but memory climbs fast at large viewports.

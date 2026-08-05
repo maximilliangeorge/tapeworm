@@ -9,6 +9,21 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Record mode** — capture a stretch of real interaction as one timeline
+  step. Arm **● Record** in the extension (or press `r` in `tapeworm author`),
+  hover around, click, drag and scroll on the page, press **ESC**, and the
+  take becomes a `record` step carrying the raw samples. The render replays it
+  through Chrome's real input pipeline frame by frame — `:hover` states,
+  drags and clicks behave as they did live — with a drawn cursor sprite so
+  the gesture is visible on camera (`page.cursor: false` hides it). Recorded
+  scroll becomes the scroll track for those frames. Recordings force
+  `jobs: 1` like the other interactions; a render at a different viewport
+  than the recording's is refused (breakpoints make it a different page), and
+  a recorded click that navigates is refused — use a `click` step for that.
+  Raw samples stay in the config so future smoothing can re-resolve them
+  without re-recording (resolution lives in `shared/gesture-core.js`,
+  currently linear interpolation).
+
 - Extension: timeline steps can be **dragged to reorder** via a ⠿ grip on each
   row — the rows part to show where the step will land. The start step stays
   pinned first. The ↑/↓ buttons in the step editor remain.
