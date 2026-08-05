@@ -25,7 +25,7 @@ function bootShared(dom: { queries?: Record<string, unknown[]>; bodyText?: strin
   };
   window.window = window;
   vm.createContext(window);
-  for (const f of ['easing-core.js', 'anchor-core.js', 'selector.js']) {
+  for (const f of ['easing-core.js', 'anchor-core.js', 'selector.js', 'gesture-core.js']) {
     vm.runInContext(readFileSync(new URL(`../src/shared/${f}`, import.meta.url), 'utf8'), window);
   }
   return window;
@@ -50,6 +50,7 @@ test('each shared file installs exactly its one global, and nothing needs a buil
   assert.equal(typeof w.TapewormEasing.cubicBezier, 'function');
   assert.equal(typeof w.TapewormAnchors.resolveAnchor, 'function');
   assert.equal(typeof w.TapewormSelector.bestSelector, 'function');
+  assert.equal(typeof w.TapewormGesture.resample, 'function');
 });
 
 // The regression table from the Phase 0 verification: extraction must not have
@@ -158,4 +159,96 @@ test('resolveAnchor throws the describeMiss message, so the CLI shows the diagno
     () => w.TapewormAnchors.resolveAnchor({ selector: '#pricing', fallbackText: 'Pricing' }),
     /still on the page/,
   );
+});
+
+/** vm-realm objects carry the vm's Object.prototype, which deepEqual rejects. */
+function plain<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v));
+}
+
+// A recording: pointer sweeps right and down over one second while the page
+// scrolls 0 → 100, with a click in the middle.
+const rec = {
+  samples: {
+    t: [0, 500, 1000],
+    x: [100, 200, 300],
+    y: [50, 150, 250],
+    s: [0, 40, 100],
+  },
+  buttons: [
+    { t: 400, action: 'down' as const },
+    { t: 600, action: 'up' as const },
+  ],
+};
+
+test('pointerAt interpolates linearly between adjacent samples', () => {
+  const { TapewormGesture: G } = bootShared();
+  assert.deepEqual(plain(G.pointerAt(rec, 0.25)), { x: 150, y: 100, scroll: 20, down: false });
+  assert.deepEqual(plain(G.pointerAt(rec, 0.75)), { x: 250, y: 200, scroll: 70, down: false });
+  assert.equal(G.pointerAt(rec, 0.5).down, true, 'inside the down..up window');
+});
+
+test('pointerAt clamps to the recorded time range at both ends', () => {
+  const { TapewormGesture: G } = bootShared();
+  assert.deepEqual(plain(G.pointerAt(rec, -1)), { x: 100, y: 50, scroll: 0, down: false });
+  assert.deepEqual(plain(G.pointerAt(rec, 99)), { x: 300, y: 250, scroll: 100, down: false });
+});
+
+test('pointerAt survives repeated timestamps without dividing by zero', () => {
+  const { TapewormGesture: G } = bootShared();
+  const dup = { samples: { t: [0, 100, 100, 200], x: [0, 10, 20, 30], y: [0, 0, 0, 0], s: [0, 0, 0, 0] } };
+  const p = G.pointerAt(dup, 0.1);
+  assert.ok(Number.isFinite(p.x));
+});
+
+test('resample lands the last frame exactly on the recording end', () => {
+  const { TapewormGesture: G } = bootShared();
+  const { frames } = G.resample(rec, 10);
+  assert.equal(frames.length, 10, 'round(1.0s * 10fps)');
+  // frame n shows (n+1)/fps, the same convention move steps use
+  assert.deepEqual(plain(frames[0]), plain(G.pointerAt(rec, 0.1)));
+  assert.deepEqual(plain(frames[9]), { x: 300, y: 250, scroll: 100, down: false });
+});
+
+test('resample places edges at their own timestamps, on the frame that first shows them', () => {
+  const { TapewormGesture: G } = bootShared();
+  const { edges } = G.resample(rec, 10);
+  assert.equal(edges.length, 2);
+  // down at 400ms → frame 3 (which shows t=0.4s); its x is the pointer AT 400ms
+  assert.equal(edges[0].frame, 3);
+  assert.equal(edges[0].kind, 'down');
+  assert.equal(edges[0].x, 180);
+  assert.equal(edges[1].frame, 5);
+  assert.equal(edges[1].kind, 'up');
+});
+
+test('a sub-frame click keeps both edges, in order, on one frame', () => {
+  const { TapewormGesture: G } = bootShared();
+  const quick = {
+    samples: { t: [0, 2000], x: [0, 100], y: [0, 0], s: [0, 0] },
+    buttons: [
+      { t: 1010, action: 'down' as const },
+      { t: 1020, action: 'up' as const },
+    ],
+  };
+  const { edges } = G.resample(quick, 10);
+  assert.equal(edges.length, 2);
+  assert.equal(edges[0].frame, edges[1].frame);
+  assert.equal(edges[0].kind, 'down');
+  assert.equal(edges[1].kind, 'up');
+});
+
+test('the frame that dispatches a press also shows the pressed state', () => {
+  const { TapewormGesture: G } = bootShared();
+  const { frames, edges } = G.resample(rec, 10);
+  assert.equal(frames[edges[0].frame].down, true);
+});
+
+test('Node imports the very same gesture implementation the page runs', async () => {
+  const gesture = await import('../src/gesture.ts');
+  const w = bootShared();
+  for (const t of [0.1, 0.4, 0.5, 0.9]) {
+    assert.deepEqual(gesture.pointerAt(rec, t), plain(w.TapewormGesture.pointerAt(rec, t)));
+  }
+  assert.deepEqual(gesture.resample(rec, 24), plain(w.TapewormGesture.resample(rec, 24)));
 });
