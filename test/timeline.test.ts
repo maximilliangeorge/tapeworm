@@ -312,6 +312,69 @@ test('plan narrates each move with target, distance, and duration', async () => 
 });
 
 test('peakStep reports the largest per-frame move in device pixels', () => {
-  const track: Track = { offsets: [0, 10, 25, 25], actions: [], sequential: false, plan: [] };
+  const track: Track = { offsets: [0, 10, 25, 25], pointer: [null, null, null, null], actions: [], sequential: false, plan: [] };
   assert.equal(peakStep(track, 2), 30); // 15 css px * dpr 2
+});
+
+// A 1s recording at the default viewport: pointer sweeps while the page
+// scrolls 0 → 100, one click in the middle.
+const REC = {
+  type: 'record' as const,
+  samples: { t: [0, 500, 1000], x: [100, 200, 300], y: [50, 150, 250], s: [0, 40, 100] },
+  buttons: [{ t: 400, action: 'down' as const }, { t: 600, action: 'up' as const }],
+  viewport: { width: 1280, height: 800, dpr: 2 },
+};
+
+test('a record step: recorded scroll becomes the offsets, snapped; the pointer lane is parallel', async () => {
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { ...REC, hold: 0.5 },
+    { type: 'move', to: 'bottom', duration: 1, ease: 'linear', hold: 0 },
+  ]);
+  const track = await buildTrack(fakeSession({ max: 4000 }), cfg);
+  // 10 start + 10 recording (1s @10fps) + 5 hold + 10 move
+  assert.equal(track.offsets.length, 35);
+  assert.equal(track.pointer.length, track.offsets.length, 'pointer is parallel to offsets');
+  // frame n of the recording shows t=(n+1)/fps; scroll lerps 0→40→100
+  assert.deepEqual(track.offsets.slice(10, 20), [8, 16, 24, 32, 40, 52, 64, 76, 88, 100]);
+  for (const y of track.offsets) {
+    assert.equal(Math.round(y * cfg.dpr), y * cfg.dpr, `${y} is off the device-pixel grid`);
+  }
+  // the pointer exists exactly on the recording's frames
+  for (let i = 0; i < 35; i++) {
+    if (i >= 10 && i < 20) assert.ok(track.pointer[i], `frame ${i} has a recorded pointer`);
+    else assert.equal(track.pointer[i], null, `frame ${i} has no pointer (hold frames included)`);
+  }
+  assert.equal(track.pointer[10]!.x, 120, 'pointer x interpolated at t=0.1s');
+  // the move continues from where the recording left the scroll
+  assert.equal(track.offsets[34], 4000);
+  assert.equal(track.offsets[25], 100 + (4000 - 100) * (1 / 10), 'move starts from the recording end');
+});
+
+test('a record step: button edges land on their frames, in order; sequential without actions', async () => {
+  const cfg = cfgWith([{ type: 'start', at: 'top', hold: 1 }, REC]);
+  const track = await buildTrack(fakeSession(), cfg);
+  assert.deepEqual(track.actions, []);
+  assert.equal(track.sequential, true, 'a recording is path-dependent input');
+  // down at 400ms → recording frame 3 → global frame 13; up at 600ms → 15
+  assert.deepEqual(track.pointer[13]!.edges, [{ kind: 'down', x: 180, y: 130 }]);
+  assert.equal(track.pointer[13]!.down, true, 'the frame dispatching the press shows it pressed');
+  assert.deepEqual(track.pointer[15]!.edges, [{ kind: 'up', x: 220, y: 170 }]);
+  assert.equal(track.pointer[16]!.edges, undefined);
+  assert.match(track.plan[1], /replay recording \(1\.00s, 3 samples, 1 click\)/);
+});
+
+test('a recording that starts away from where the timeline stands earns a jump-cut warning', async () => {
+  const away = {
+    ...REC,
+    buttons: undefined,
+    samples: { ...REC.samples, s: [3200, 3240, 3300] },
+  };
+  const cfg = cfgWith([{ type: 'start', at: 'top', hold: 0.5 }, away]);
+  const { plan } = await buildTrack(fakeSession(), cfg);
+  assert.match(plan[2], /⚠ the recording starts at scroll 3200 but the timeline stands at 0/);
+
+  const nearby = { ...REC, buttons: undefined };
+  const quiet = await buildTrack(fakeSession(), cfgWith([{ type: 'start', at: 'top', hold: 0.5 }, nearby]));
+  assert.ok(!quiet.plan.some((l) => l.includes('⚠')), 'no warning when the recording starts where the timeline is');
 });
