@@ -311,6 +311,49 @@ test('preview geometry gives record steps their real duration, and seek replays 
   assert.equal(w.scrollY, 200);
 });
 
+test('preview emulates hover under the recorded pointer, and a recording ends earlier hovers', () => {
+  const boxClasses = new Set<string>();
+  const box: any = {
+    nodeType: 1,
+    parentElement: null,
+    getBoundingClientRect: () => ({ left: 150, top: 30, width: 100, height: 40 }),
+    classList: { add: (c: string) => boxClasses.add(c), remove: (c: string) => boxClasses.delete(c) },
+  };
+  const menuClasses = new Set<string>();
+  const menu: any = {
+    nodeType: 1,
+    parentElement: null,
+    getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+    classList: { add: (c: string) => menuClasses.add(c), remove: (c: string) => menuClasses.delete(c) },
+  };
+  const w = bootOverlay({ queries: { '.menu': [menu] } });
+  // what the render's trusted pointer would be over: the box occupies x 150-250
+  w.document.elementFromPoint = (x: number, y: number) => (x >= 150 && x < 250 && y >= 30 ? box : null);
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+
+  // start hold 1s → hover settle 1s → 2s recording (pointer x 100→300) → 0.5s hold
+  const steps = [
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'hover', target: { selector: '.menu' }, settle: 1 },
+    GEO_REC,
+  ];
+  O.seek(steps, 1.5); // mid-hover-settle
+  assert.ok(menuClasses.has('__tw-hover'), 'the hover step still works');
+
+  O.seek(steps, 3.0); // 1s into the recording: pointer at x=200 — over the box
+  assert.ok(boxClasses.has('__tw-hover'), 'hover follows the recorded pointer');
+  assert.ok(!menuClasses.has('__tw-hover'), 'starting the recording ended the earlier hover');
+
+  O.seek(steps, 2.2); // 0.2s in: pointer at x=120 — over nothing
+  assert.ok(!boxClasses.has('__tw-hover'));
+
+  O.seek(steps, 4.4); // in the trailing hold: the render parks the pointer here
+  assert.ok(!boxClasses.has('__tw-hover'), 'nothing hovered after the recording');
+  assert.ok(!menuClasses.has('__tw-hover'), 'the earlier hover does not come back either');
+});
+
 test('overlay reports whether the window IS the render viewport — never a scaled stand-in', () => {
   const w = bootOverlay(); // window is 1000×700
   const O = w.TapewormOverlay;

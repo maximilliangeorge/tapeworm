@@ -453,6 +453,11 @@ function setPreviewHover(anchor) {
   if (anchor) {
     try { el = document.querySelectorAll(anchor.selector)[anchor.nth || 0] || null; } catch (e) {}
   }
+  setPreviewHoverEl(el);
+}
+
+/** Same, from an element in hand — recordings hit-test rather than select. */
+function setPreviewHoverEl(el) {
   if (el === hoverEl) return;
   if (hoverEl) {
     fireMouse(hoverEl, 'mouseout');
@@ -488,6 +493,41 @@ function hoverAnchorAt(geo, t) {
     current = ev.anchor;
   }
   return current;
+}
+
+/**
+ * What the recorded pointer is over at this point in playback — the element
+ * the render's trusted input would hover. undefined when t is outside every
+ * record segment (so the hover-step machinery owns hover instead);
+ * element-or-null inside one.
+ */
+function recHoverElementAt(geo, tSec) {
+  const t = Math.max(0, Math.min(tSec, geo.total));
+  for (const s of geo.segments) {
+    if (s.rec && t >= s.t0 && t <= s.t1) {
+      const p = G.pointerAt(s.rec, t - s.t0);
+      return hitTest(p.x, p.y);
+    }
+  }
+  return undefined;
+}
+
+/** elementFromPoint that sees through the playback shield and our own host. */
+function hitTest(x, y) {
+  const shieldPE = els.shield ? els.shield.style.pointerEvents : '';
+  if (els.shield) els.shield.style.pointerEvents = 'none';
+  let el = null;
+  try { el = document.elementFromPoint(x, y); } catch (e) {}
+  if (els.shield) els.shield.style.pointerEvents = shieldPE;
+  if (!el || el === host || el === document.documentElement || el === document.body) return null;
+  return el;
+}
+
+/** During a record segment the recorded pointer owns hover; otherwise the hover steps do. */
+function applyPreviewHover(geo, t) {
+  const recEl = recHoverElementAt(geo, t);
+  if (recEl !== undefined) setPreviewHoverEl(recEl);
+  else setPreviewHover(hoverAnchorAt(geo, t));
 }
 
 // ---------------------------------------------------------------- preview
@@ -530,11 +570,14 @@ function buildGeometry(steps) {
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
       if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null, idx: i }); t += hold; }
     } else if (step.type === 'record') {
-      // Preview scope: the recorded scroll replays and a cursor dot traces the
-      // pointer, via the same gesture core the renderer resolves with. Hover
-      // and drag effects are render-only — driving synthetic hover from a
-      // moving point every frame would be a lot of machinery for an
-      // approximation the render overrules.
+      // The recorded scroll replays, a cursor dot traces the pointer, and the
+      // point under it is hover-emulated per tick (hit-tested live — see
+      // applyPreviewHover), all via the same gesture core the renderer
+      // resolves with. Clicks/drags stay render-only: their effects persist
+      // on the page, which a scrubbing preview can't afford. The null pointer
+      // event ends any earlier hover step's hover, and stands after the
+      // recording too — the render parks the pointer there.
+      pointerEvents.push({ t, anchor: null });
       const dur = G.durationSec(step);
       segs.push({ t0: t, t1: t + dur, from: y, to: null, easeFn: null, idx: i, rec: step });
       t += dur;
@@ -605,7 +648,7 @@ function play(steps) {
     preview.geo.clicks.forEach((c, i) => {
       if (c.t <= t && !preview.fired.has(i)) { preview.fired.add(i); firePreviewClick(c.target); }
     });
-    setPreviewHover(hoverAnchorAt(preview.geo, t));
+    applyPreviewHover(preview.geo, t);
     updatePreviewCursor(preview.geo, t);
     emit('preview:time', { t, total: preview.geo.total });
     if (t >= preview.geo.total) {
@@ -625,7 +668,7 @@ function seek(steps, tSec) {
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
   A.setScroll(offsetAt(geo, tSec));
-  setPreviewHover(hoverAnchorAt(geo, tSec));
+  applyPreviewHover(geo, tSec);
   updatePreviewCursor(geo, tSec);
   return { total: geo.total, t: Math.max(0, Math.min(tSec, geo.total)) };
 }

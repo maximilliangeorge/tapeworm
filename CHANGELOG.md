@@ -22,7 +22,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   a recorded click that navigates is refused — use a `click` step for that.
   Raw samples stay in the config so future smoothing can re-resolve them
   without re-recording (resolution lives in `shared/gesture-core.js`,
-  currently linear interpolation).
+  currently linear interpolation). The extension preview replays a
+  recording's scroll, traces a cursor dot, and emulates the hover under it
+  (untrusted, like hover steps); click and drag effects are render-only.
 
 - Extension: timeline steps can be **dragged to reorder** via a ⠿ grip on each
   row — the rows part to show where the step will land. The start step stays
