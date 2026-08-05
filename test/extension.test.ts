@@ -55,6 +55,11 @@ test('every extension script parses', () => {
 // Boot the overlay in a vm and check its preview geometry uses the renderer's
 // exact defaults (start hold 0.8, mid-move hold 0.6, last 0.8, autoDuration).
 
+/** vm-realm objects carry the vm's prototypes, which strict deepEqual rejects. */
+function plain<T>(v: T): T {
+  return v === undefined ? v : JSON.parse(JSON.stringify(v));
+}
+
 function fakeEl(): any {
   const el: any = {
     className: '',
@@ -73,17 +78,27 @@ function fakeEl(): any {
 
 function bootOverlay(opts: { maxScroll?: number; queries?: Record<string, unknown[]> } = {}) {
   const docHeight = (opts.maxScroll ?? 4000) + 700; // + innerHeight below
+  // Real listener registry + hand-pumped rAF + a settable clock, so the tests
+  // can feed the overlay synthetic input exactly like a page would.
+  const listeners = new Map<string, Set<(ev: unknown) => void>>();
+  const rafQueue: Array<(t: number) => void> = [];
+  let now = 0;
   const window: any = {
     innerWidth: 1000,
     innerHeight: 700,
     devicePixelRatio: 2,
     scrollY: 0,
     location: { href: 'https://example.com/' },
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    requestAnimationFrame: () => 0,
+    addEventListener: (type: string, fn: (ev: unknown) => void) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(fn);
+    },
+    removeEventListener: (type: string, fn: (ev: unknown) => void) => {
+      listeners.get(type)?.delete(fn);
+    },
+    requestAnimationFrame: (cb: (t: number) => void) => rafQueue.push(cb),
     cancelAnimationFrame: () => {},
-    performance: { now: () => 0 },
+    performance: { now: () => now },
     scrollTo: ({ top }: { top: number }) => { window.scrollY = top; },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     document: {
@@ -96,8 +111,13 @@ function bootOverlay(opts: { maxScroll?: number; queries?: Record<string, unknow
     },
   };
   window.window = window;
+  window.__dispatch = (type: string, ev: unknown) => {
+    for (const fn of [...(listeners.get(type) ?? [])]) fn(ev);
+  };
+  window.__pumpRaf = () => { for (const cb of rafQueue.splice(0)) cb(now); };
+  window.__setNow = (ms: number) => { now = ms; };
   vm.createContext(window);
-  for (const f of ['easing-core.js', 'anchor-core.js', 'selector.js']) {
+  for (const f of ['easing-core.js', 'anchor-core.js', 'selector.js', 'gesture-core.js']) {
     vm.runInContext(read(`src/shared/${f}`), window);
   }
   vm.runInContext(read('extension/content/overlay.js'), window);
@@ -176,6 +196,111 @@ test('preview emulates hover: marker class applied at hover time, cleared by lat
   assert.ok(classes.has('__tw-hover'), 'scrubbing back re-applies it');
   O.stopPreview();
   assert.ok(!classes.has('__tw-hover'), 'stopping the preview clears it');
+});
+
+test('record mode: real input is sampled per display frame, ESC finishes with one record:done', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  const events: Array<[string, any]> = [];
+  O.mount((t: string, d: any) => events.push([t, d]));
+
+  w.__setNow(0);
+  assert.deepEqual(plain(O.startRecording()), { recording: true });
+  assert.deepEqual(plain(O.startRecording()), { error: 'already-recording' });
+
+  w.__dispatch('pointermove', { clientX: 100.4, clientY: 50.6 });
+  w.__pumpRaf(); // sample at t=0
+  w.__setNow(100); w.scrollY = 40;
+  w.__dispatch('pointerdown', { button: 0, clientX: 110, clientY: 60 });
+  w.__pumpRaf(); // t=100, with the press position and the scroll
+  w.__setNow(150);
+  w.__dispatch('pointerup', { button: 0 });
+  w.__pumpRaf();
+  w.__setNow(200);
+  w.__dispatch('pointermove', { clientX: 130, clientY: 80 });
+  w.__pumpRaf();
+
+  let prevented = false;
+  w.__dispatch('keydown', {
+    key: 'Escape',
+    preventDefault: () => { prevented = true; },
+    stopImmediatePropagation: () => {},
+  });
+  assert.ok(prevented, 'ESC is consumed, same as the picker');
+
+  const done = events.filter(([t]) => t === 'record:done');
+  assert.equal(done.length, 1, 'exactly one record:done');
+  const d = done[0][1];
+  assert.deepEqual(plain(d.samples.t), [0, 100, 150, 200]);
+  assert.deepEqual(plain(d.samples.x), [100, 110, 110, 130], 'integer-rounded, held between moves');
+  assert.deepEqual(plain(d.samples.y), [51, 60, 60, 80]);
+  assert.deepEqual(plain(d.samples.s), [0, 40, 40, 40], 'scroll captured per sample');
+  assert.deepEqual(plain(d.buttons), [{ t: 100, action: 'down' }, { t: 150, action: 'up' }]);
+  assert.deepEqual(plain(d.viewport), { width: 1000, height: 700, dpr: 2 }, 'the ACTUAL window, honestly stamped');
+  assert.equal(d.durationMs, 200);
+
+  // listeners are gone: further input goes nowhere
+  w.__dispatch('pointermove', { clientX: 999, clientY: 999 });
+  w.__pumpRaf();
+  assert.equal(events.filter(([t]) => t === 'record:done').length, 1);
+});
+
+test('record mode: nothing captured means record:cancelled, not an empty step', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  const events: Array<[string, any]> = [];
+  O.mount((t: string, d: any) => events.push([t, d]));
+  O.startRecording();
+  // the pointer never moved — no samples exist
+  w.__dispatch('keydown', { key: 'Escape', preventDefault: () => {}, stopImmediatePropagation: () => {} });
+  assert.ok(events.some(([t]) => t === 'record:cancelled'));
+  assert.ok(!events.some(([t]) => t === 'record:done'));
+});
+
+test('record mode and preview playback exclude each other', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  const steps = [{ type: 'start', at: 'top', hold: 1 }];
+
+  O.play(steps);
+  assert.deepEqual(plain(O.startRecording()), { error: 'preview-playing' }, 'the shield would swallow the input');
+  O.stopPreview();
+
+  O.startRecording();
+  assert.equal(O.play(steps), null, 'no playback while recording');
+  O.stopRecording();
+});
+
+// A recording usable in geometry tests: 2s, scroll 0 → 200, pointer drifting right.
+const GEO_REC = {
+  type: 'record',
+  samples: { t: [0, 1000, 2000], x: [100, 200, 300], y: [50, 50, 50], s: [0, 100, 200] },
+  viewport: { width: 1000, height: 700, dpr: 2 },
+  hold: 0.5,
+};
+
+test('preview geometry gives record steps their real duration, and seek replays their scroll', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  const E = w.TapewormEasing;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+
+  const steps = [
+    { type: 'start', at: 'top', hold: 1 },
+    GEO_REC,
+    { type: 'move', to: 'bottom' }, // last: default hold 0.8, auto duration from the recording's end
+  ];
+  const auto = E.autoDuration(4000 - 200, 700, E.resolveEase(undefined, (4000 - 200) / 700));
+  const { total, errors } = O.duration(steps);
+  assert.equal(errors.length, 0);
+  assert.ok(Math.abs(total - (1 + 2 + 0.5 + auto + 0.8)) < 1e-9, `total ${total}`);
+
+  O.seek(steps, 1.5); // 0.5s into the recording: scroll lerps 0→100
+  assert.equal(w.scrollY, 50);
+  O.seek(steps, 3.2); // in the record hold: parked at the recording's end
+  assert.equal(w.scrollY, 200);
 });
 
 test('overlay reports whether the window IS the render viewport — never a scaled stand-in', () => {

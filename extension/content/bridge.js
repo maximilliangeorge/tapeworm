@@ -27,6 +27,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'info': result = O.pageInfo(); break;
     case 'picker:start': O.startPicker(d.mode); break;
     case 'picker:stop': O.stopPicker(); break;
+    case 'record:start': result = O.startRecording(); break;
+    case 'record:stop': O.stopRecording(); break;
     case 'preview:play': result = O.play(d.steps); break;
     case 'preview:seek': result = O.seek(d.steps, d.t); break;
     case 'preview:stop': O.stopPreview(); break;

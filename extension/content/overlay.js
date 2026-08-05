@@ -10,7 +10,7 @@
  * can't reach in and our CSS can't leak out.
  *
  * Depends on the shared core globals: TapewormAnchors, TapewormEasing,
- * TapewormSelector (inject those files first).
+ * TapewormSelector, TapewormGesture (inject those files first).
  */
 (() => {
 'use strict';
@@ -19,6 +19,7 @@ if (globalThis.TapewormOverlay) return;
 const A = globalThis.TapewormAnchors;
 const E = globalThis.TapewormEasing;
 const S = globalThis.TapewormSelector;
+const G = globalThis.TapewormGesture;
 
 let emit = () => {};
 let host = null;
@@ -29,6 +30,7 @@ let picking = false;
 let pickMode = 'move'; // 'move' | 'click' | 'hover' — what the next pick records
 let pickTarget = null;
 let preview = null; // { segments, total, startWall, offsetSec, playing, raf }
+let recording = null; // { t0, last:{x,y}|null, t:[], x:[], y:[], s:[], buttons:[], raf }
 let lastGate = null;
 
 const CSS = `
@@ -66,6 +68,22 @@ const CSS = `
     padding: 10px 14px; border-radius: 6px; max-width: 560px; text-align: center;
     box-shadow: 0 2px 12px rgba(0,0,0,0.4);
   }
+  .rec-banner {
+    position: fixed; z-index: 5; left: 50%; transform: translateX(-50%); top: 16px;
+    display: none; background: #3a1518; color: #ffd9dc; font-size: 13px;
+    padding: 10px 14px; border-radius: 6px; text-align: center;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  }
+  .rec-banner::before {
+    content: ''; display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: #ff4d57; margin-right: 8px; vertical-align: -1px;
+  }
+  .preview-cursor {
+    position: fixed; z-index: 5; display: none; pointer-events: none;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: rgba(22, 24, 29, 0.85); border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); transform: translate(-50%, -50%);
+  }
 `;
 
 function mount(onEmit) {
@@ -90,7 +108,12 @@ function mount(onEmit) {
   els.banner.textContent =
     'This page gates scrolling behind an intro. Scroll down manually to unlock it, then add keyframes. ' +
     '(The renderer unlocks it automatically at capture time.)';
-  shadow.append(els.badge, els.highlight, els.tip, els.shield, els.banner);
+  // The recording indicator is its own element, NOT els.banner: checkGate()
+  // rewrites the gate banner's display on every scroll, and recording scrolls.
+  els.recBanner = div('rec-banner');
+  els.recBanner.textContent = 'Recording — press ESC to stop';
+  els.previewCursor = div('preview-cursor');
+  shadow.append(els.badge, els.highlight, els.tip, els.shield, els.banner, els.recBanner, els.previewCursor);
   document.documentElement.appendChild(host);
 
   addEventListener('resize', onResize, { passive: true });
@@ -103,6 +126,7 @@ function mount(onEmit) {
 
 function destroy() {
   stopPicker();
+  stopRecording();
   stopPreview();
   removeEventListener('resize', onResize);
   removeEventListener('scroll', onScrollOrGate);
@@ -274,6 +298,110 @@ function safeResolve(anchor) {
   try { return A.resolveAnchor(anchor); } catch (e) { return null; }
 }
 
+// ---------------------------------------------------------------- recording
+/**
+ * Record mode: the user's REAL interactions — pointer movement, clicks/drags,
+ * scrolling — sampled once per display frame until ESC. The raw samples become
+ * one `record` step; the renderer replays them through Chrome's input
+ * pipeline, so what was hovered here is hovered there. The shield stays OFF:
+ * unlike preview playback, the real pointer must reach the page.
+ *
+ * rAF-driven sampling rather than raw pointermove: uniform at-most-display-
+ * rate cadence (the decimation), and it captures scroll-only motion where the
+ * pointer never moves. Everything is integer-rounded — sub-pixel precision is
+ * below what input dispatch or the drawn cursor can express.
+ */
+const RECORD_MAX_MS = 120000; // storage hygiene: ~0.5 MB worst case, quota is 10 MB
+
+function startRecording() {
+  if (recording) return { error: 'already-recording' };
+  if (preview && preview.playing) return { error: 'preview-playing' };
+  stopPicker(); // ESC must mean exactly one thing at a time
+  recording = { t0: performance.now(), last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0 };
+  addEventListener('pointermove', onRecPointer, { capture: true, passive: true });
+  addEventListener('pointerdown', onRecDown, { capture: true, passive: true });
+  addEventListener('pointerup', onRecUp, { capture: true, passive: true });
+  addEventListener('keydown', onRecKey, true);
+  if (els.recBanner) els.recBanner.style.display = 'block';
+  const sample = () => {
+    if (!recording) return;
+    const now = performance.now() - recording.t0;
+    if (recording.last) {
+      recording.t.push(Math.round(now));
+      recording.x.push(recording.last.x);
+      recording.y.push(recording.last.y);
+      recording.s.push(Math.round(window.scrollY));
+    }
+    if (now >= RECORD_MAX_MS) { finishRecording(); return; }
+    recording.raf = requestAnimationFrame(sample);
+  };
+  recording.raf = requestAnimationFrame(sample);
+  return { recording: true };
+}
+
+function onRecPointer(ev) {
+  if (recording) recording.last = { x: Math.round(ev.clientX), y: Math.round(ev.clientY) };
+}
+
+function onRecDown(ev) {
+  if (!recording || ev.button !== 0) return;
+  onRecPointer(ev);
+  recording.buttons.push({ t: Math.round(performance.now() - recording.t0), action: 'down' });
+}
+
+function onRecUp(ev) {
+  if (!recording || ev.button !== 0) return;
+  recording.buttons.push({ t: Math.round(performance.now() - recording.t0), action: 'up' });
+}
+
+function onRecKey(ev) {
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    finishRecording();
+  }
+}
+
+function teardownRecording() {
+  removeEventListener('pointermove', onRecPointer, true);
+  removeEventListener('pointerdown', onRecDown, true);
+  removeEventListener('pointerup', onRecUp, true);
+  removeEventListener('keydown', onRecKey, true);
+  if (recording && recording.raf) cancelAnimationFrame(recording.raf);
+  if (els.recBanner) els.recBanner.style.display = 'none';
+}
+
+function finishRecording() {
+  if (!recording) return;
+  const rec = recording;
+  recording = null;
+  teardownRecording();
+  if (rec.t.length < 2) { emit('record:cancelled', {}); return; }
+  // Rebase so the first sample is t=0: the lead time before the pointer was
+  // first seen is dead air nobody wants in the video.
+  const base = rec.t[0];
+  const t = rec.t.map((v) => v - base);
+  const lastT = t[t.length - 1];
+  const buttons = rec.buttons
+    .map((b) => ({ t: Math.min(Math.max(b.t - base, 0), lastT), action: b.action }))
+    // a press armed before the first sample has no position to land on; a
+    // recording also can't start mid-drag, so drop a leading orphaned 'up'
+    .filter((b, i, all) => !(i === 0 && b.action === 'up'));
+  emit('record:done', {
+    samples: { t, x: rec.x, y: rec.y, s: rec.s },
+    buttons: buttons.length ? buttons : undefined,
+    // the ACTUAL viewport, not settings: the render refuses a mismatch, and
+    // an honest stamp is what makes that check mean something
+    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+    durationMs: lastT,
+  });
+}
+
+/** Panel-side disarm: same as ESC — keep what was captured rather than lose it. */
+function stopRecording() {
+  finishRecording();
+}
+
 // ---------------------------------------------------------------- hover emulation (preview only)
 /**
  * The render performs hovers with REAL input (trusted, :hover just works).
@@ -401,6 +529,18 @@ function buildGeometry(steps) {
       const isLast = i === steps.length - 1;
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
       if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null, idx: i }); t += hold; }
+    } else if (step.type === 'record') {
+      // Preview scope: the recorded scroll replays and a cursor dot traces the
+      // pointer, via the same gesture core the renderer resolves with. Hover
+      // and drag effects are render-only — driving synthetic hover from a
+      // moving point every frame would be a lot of machinery for an
+      // approximation the render overrules.
+      const dur = G.durationSec(step);
+      segs.push({ t0: t, t1: t + dur, from: y, to: null, easeFn: null, idx: i, rec: step });
+      t += dur;
+      y = step.samples.s[step.samples.s.length - 1];
+      const hold = step.hold != null ? step.hold : 0;
+      if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null, idx: i }); t += hold; }
     } else if (step.type === 'click' || step.type === 'hover') {
       // Both are emulated in the preview with synthetic (untrusted) events —
       // hovers continuously via setPreviewHover, clicks once as playback
@@ -423,6 +563,7 @@ function offsetAt(geo, tSec) {
   for (const s of geo.segments) {
     if (t <= s.t1 || s === geo.segments[geo.segments.length - 1]) {
       if (t < s.t0) return s.from;
+      if (s.rec) return G.pointerAt(s.rec, t - s.t0).scroll;
       if (!s.easeFn || s.t1 === s.t0) return s.to;
       const u = (t - s.t0) / (s.t1 - s.t0);
       return s.from + (s.to - s.from) * s.easeFn(Math.min(1, u));
@@ -431,7 +572,25 @@ function offsetAt(geo, tSec) {
   return 0;
 }
 
+/** Trace the recorded pointer with the dot while t is inside a record segment. */
+function updatePreviewCursor(geo, tSec) {
+  if (!els.previewCursor) return;
+  const t = Math.max(0, Math.min(tSec, geo.total));
+  for (const s of geo.segments) {
+    if (s.rec && t >= s.t0 && t <= s.t1) {
+      const p = G.pointerAt(s.rec, t - s.t0);
+      const st = els.previewCursor.style;
+      st.display = 'block';
+      st.left = p.x + 'px';
+      st.top = p.y + 'px';
+      return;
+    }
+  }
+  els.previewCursor.style.display = 'none';
+}
+
 function play(steps) {
+  if (recording) return null; // the shield would swallow the input being recorded
   stopPreview(true);
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
@@ -447,6 +606,7 @@ function play(steps) {
       if (c.t <= t && !preview.fired.has(i)) { preview.fired.add(i); firePreviewClick(c.target); }
     });
     setPreviewHover(hoverAnchorAt(preview.geo, t));
+    updatePreviewCursor(preview.geo, t);
     emit('preview:time', { t, total: preview.geo.total });
     if (t >= preview.geo.total) {
       preview.playing = false;
@@ -466,6 +626,7 @@ function seek(steps, tSec) {
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
   A.setScroll(offsetAt(geo, tSec));
   setPreviewHover(hoverAnchorAt(geo, tSec));
+  updatePreviewCursor(geo, tSec);
   return { total: geo.total, t: Math.max(0, Math.min(tSec, geo.total)) };
 }
 
@@ -473,6 +634,7 @@ function stopPreview(keepHover) {
   if (preview && preview.raf) cancelAnimationFrame(preview.raf);
   preview = null;
   if (els.shield) els.shield.style.display = 'none';
+  if (els.previewCursor) els.previewCursor.style.display = 'none';
   if (!keepHover) setPreviewHover(null);
 }
 
@@ -537,6 +699,8 @@ globalThis.TapewormOverlay = {
   pageInfo,
   startPicker,
   stopPicker,
+  startRecording,
+  stopRecording,
   play,
   seek,
   stopPreview,
