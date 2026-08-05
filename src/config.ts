@@ -34,7 +34,7 @@ export function loadConfig(path: string): Config {
   return parseConfig(raw, path);
 }
 
-const STEP_TYPES = ['start', 'move', 'hold', 'click', 'hover', 'wait'] as const;
+const STEP_TYPES = ['start', 'move', 'hold', 'click', 'hover', 'wait', 'record'] as const;
 
 /** Defined in the format now so authored configs survive, executable later. */
 const NOT_YET_EXECUTABLE = ['wait'] as const;
@@ -82,6 +82,7 @@ export function normaliseTimeline(entries: TimelineEntry[]): Step[] {
       if (e.type === 'hold' && !(typeof e.seconds === 'number' && Number.isFinite(e.seconds) && e.seconds >= 0)) {
         throw new Error(`timeline[${i}]: a "hold" step needs "seconds" >= 0`);
       }
+      if (e.type === 'record') validateRecord(e, i);
       if (i === 0 && e.type !== 'start') steps.push({ type: 'start', at: 'top', hold: 0 });
       steps.push(e as Step);
       continue;
@@ -98,6 +99,69 @@ export function normaliseTimeline(entries: TimelineEntry[]): Step[] {
     }
   }
   return steps;
+}
+
+/**
+ * A recording is authored data the renderer replays blind, so malformed samples
+ * must fail here with the sample index, not as a nonsense frame mid-render.
+ */
+function validateRecord(e: Step & { type: 'record' }, i: number): void {
+  const s = e.samples as { t?: unknown; x?: unknown; y?: unknown; s?: unknown } | undefined;
+  const isNums = (v: unknown): v is number[] =>
+    Array.isArray(v) && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+  if (!s || !isNums(s.t) || !isNums(s.x) || !isNums(s.y) || !isNums(s.s)) {
+    throw new Error(
+      `timeline[${i}]: a "record" step needs "samples" with parallel number arrays t, x, y, s`,
+    );
+  }
+  const len = s.t.length;
+  if (len < 2) throw new Error(`timeline[${i}]: "record" samples need at least 2 entries (got ${len})`);
+  if (s.x.length !== len || s.y.length !== len || s.s.length !== len) {
+    throw new Error(
+      `timeline[${i}]: "record" sample arrays must be the same length ` +
+        `(t=${len}, x=${s.x.length}, y=${s.y.length}, s=${s.s.length})`,
+    );
+  }
+  if (s.t[0] < 0) throw new Error(`timeline[${i}]: "record" samples.t must start at >= 0`);
+  for (let n = 1; n < len; n++) {
+    if (s.t[n] < s.t[n - 1]) {
+      throw new Error(
+        `timeline[${i}]: "record" samples.t must be non-decreasing (sample ${n} goes ${s.t[n - 1]} → ${s.t[n]})`,
+      );
+    }
+  }
+  const lastT = s.t[len - 1];
+  if (e.buttons !== undefined) {
+    if (!Array.isArray(e.buttons)) throw new Error(`timeline[${i}]: "record" buttons must be an array`);
+    let prevT = -1;
+    for (let n = 0; n < e.buttons.length; n++) {
+      const b = e.buttons[n] as { t?: unknown; action?: unknown };
+      if (!b || typeof b.t !== 'number' || !Number.isFinite(b.t) || (b.action !== 'down' && b.action !== 'up')) {
+        throw new Error(`timeline[${i}]: "record" buttons[${n}] must be { t: ms, action: "down" | "up" }`);
+      }
+      if (b.t < 0 || b.t > lastT) {
+        throw new Error(`timeline[${i}]: "record" buttons[${n}].t (${b.t}) is outside the recording (0..${lastT})`);
+      }
+      if (b.t < prevT) throw new Error(`timeline[${i}]: "record" buttons must be chronological`);
+      if (n === 0 && b.action !== 'down') {
+        throw new Error(
+          `timeline[${i}]: "record" buttons must begin with a "down" — a recording can't start mid-press`,
+        );
+      }
+      prevT = b.t;
+    }
+  }
+  const v = e.viewport as { width?: unknown; height?: unknown } | undefined;
+  const isDim = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
+  if (!v || !isDim(v.width) || !isDim(v.height)) {
+    throw new Error(
+      `timeline[${i}]: a "record" step needs the "viewport" it was recorded at ({ width, height }) — ` +
+        `the render refuses to replay it at a different size`,
+    );
+  }
+  if (e.hold != null && !(typeof e.hold === 'number' && Number.isFinite(e.hold) && e.hold >= 0)) {
+    throw new Error(`timeline[${i}]: "hold" must be seconds >= 0`);
+  }
 }
 
 /**
@@ -182,6 +246,25 @@ export function resolveConfig(input: Config): Resolved {
     throw new Error(`prewarm.mode must be full, cache or none (got "${prewarmMode}")`);
   }
 
+  // A recording's coordinates and scroll offsets only mean anything at the
+  // viewport they were captured in — breakpoints make a different size a
+  // DIFFERENT page. Scaling would produce a plausible render of the wrong
+  // thing, so refuse instead. (Runs here, not in normaliseTimeline, because
+  // the resolved viewport doesn't exist there.)
+  const width = input.viewport?.width ?? 1280;
+  const height = input.viewport?.height ?? 800;
+  for (let i = 0; i < timeline.length; i++) {
+    const s = timeline[i];
+    if (s.type !== 'record') continue;
+    if (s.viewport.width !== width || s.viewport.height !== height) {
+      throw new Error(
+        `timeline[${i}]: this recording was made at ${s.viewport.width}×${s.viewport.height} but the render ` +
+          `viewport is ${width}×${height} — a different viewport is a different layout, so the recorded ` +
+          `pointer would land on the wrong things. Set viewport to the recorded size, or re-record.`,
+      );
+    }
+  }
+
   const auto = input.auto
     ? { maxSections: (typeof input.auto === 'object' ? input.auto.maxSections : undefined) ?? 6 }
     : (false as const);
@@ -192,8 +275,8 @@ export function resolveConfig(input: Config): Resolved {
 
   return {
     url,
-    width: input.viewport?.width ?? 1280,
-    height: input.viewport?.height ?? 800,
+    width,
+    height,
     dpr,
     fps,
     timeline,
@@ -212,6 +295,7 @@ export function resolveConfig(input: Config): Resolved {
       hideOverlays: input.page?.hideOverlays ?? true,
       clock: input.page?.clock ?? 'virtual',
       seekAnimations: input.page?.seekAnimations ?? true,
+      cursor: input.page?.cursor ?? true,
       video: input.page?.video ?? 'sync',
       css: input.page?.css ?? '',
       script: input.page?.script ?? '',
@@ -230,7 +314,8 @@ export function resolveConfig(input: Config): Resolved {
     // different reveals than one that scrolled through. So those modes are single-job.
     // Interactions are path-dependent for the same reason: frame N shows whatever the
     // clicks before it did to the page, so an interactive timeline can't shard either.
-    jobs: prewarmMode === 'full' && !timeline.some((s) => s.type === 'click' || s.type === 'hover')
+    // Recordings replay real input (hover states, drags), so they're interactions too.
+    jobs: prewarmMode === 'full' && !timeline.some((s) => s.type === 'click' || s.type === 'hover' || s.type === 'record')
       ? (input.jobs ?? Math.max(1, Math.min(4, cpus().length - 1)))
       : 1,
     chromePath: input.chromePath ?? null,

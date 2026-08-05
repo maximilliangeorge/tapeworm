@@ -156,6 +156,53 @@ test('malformed steps fail with the index and the problem', () => {
   );
 });
 
+// A minimal valid recording at the default 1280×800 viewport.
+const REC = {
+  type: 'record' as const,
+  samples: { t: [0, 500, 1000], x: [100, 200, 300], y: [50, 60, 70], s: [0, 40, 100] },
+  buttons: [{ t: 400, action: 'down' as const }, { t: 600, action: 'up' as const }],
+  viewport: { width: 1280, height: 800, dpr: 2 },
+};
+
+test('record steps are accepted and pass through verbatim', () => {
+  const r = resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, REC] });
+  assert.deepEqual(r.timeline[1], REC);
+  assert.equal(r.page.cursor, true, 'drawn cursor defaults on');
+  assert.equal(resolveConfig({ url: BASE.url, page: { cursor: false }, timeline: [{ at: 'top' }, REC] }).page.cursor, false);
+});
+
+test('a recording forces jobs=1: replayed input is path-dependent', () => {
+  const r = resolveConfig({ url: BASE.url, jobs: 4, timeline: [{ at: 'top' }, REC] });
+  assert.equal(r.jobs, 1);
+});
+
+test('a recording made at a different viewport is refused, not scaled', () => {
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, viewport: { width: 1440, height: 900 }, timeline: [{ at: 'top' }, REC] }),
+    /recorded at 1280×800.*render viewport is 1440×900|made at 1280×800/,
+  );
+  // and the message says what to do about it
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, viewport: { width: 1440, height: 900 }, timeline: [{ at: 'top' }, REC] }),
+    /Set viewport to the recorded size, or re-record/,
+  );
+});
+
+test('malformed recordings fail with the index and the defect', () => {
+  const bad = (over: Record<string, unknown>, re: RegExp) =>
+    assert.throws(() => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, ...over } as never] }), re);
+
+  bad({ samples: undefined }, /timeline\[1\].*parallel number arrays/);
+  bad({ samples: { t: [0, 100], x: [0], y: [0, 0], s: [0, 0] } }, /same length.*x=1/);
+  bad({ samples: { t: [0], x: [0], y: [0], s: [0] } }, /at least 2 entries/);
+  bad({ samples: { t: [0, 500, 400], x: [0, 0, 0], y: [0, 0, 0], s: [0, 0, 0] } }, /non-decreasing \(sample 2 goes 500 → 400\)/);
+  bad({ buttons: [{ t: 400, action: 'up' }] }, /must begin with a "down"/);
+  bad({ buttons: [{ t: 4000, action: 'down' }] }, /outside the recording/);
+  bad({ buttons: [{ t: 400, action: 'press' }] }, /buttons\[0\] must be/);
+  bad({ viewport: undefined }, /needs the "viewport" it was recorded at/);
+  bad({ hold: -1 }, /"hold" must be seconds >= 0/);
+});
+
 test('the start step can pin the url: used when config.url is absent, must agree when both exist', () => {
   const timeline = [
     { type: 'start', at: 'top', url: 'https://example.com/about' },

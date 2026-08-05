@@ -60,9 +60,9 @@ export type Segment = {
  * are an addition rather than a breaking change. `timeline` entries may be a
  * legacy `Segment` or a `Step`, mixed freely.
  *
- * `click`/`hover`/`wait` are part of the format NOW — configs containing them
- * parse and typecheck — but are rejected with a clear message until interactions
- * land, so designer-authored configs won't break when they do.
+ * `wait` is part of the format NOW — configs containing it parse and typecheck —
+ * but is rejected with a clear message until it lands, so designer-authored
+ * configs won't break when it does.
  */
 export type Step =
   /**
@@ -76,7 +76,34 @@ export type Step =
   | { type: 'hold'; seconds: number }
   | { type: 'click'; target: Anchor; settle?: number }
   | { type: 'hover'; target: Anchor; settle?: number }
-  | { type: 'wait'; forSelector?: string; seconds?: number };
+  | { type: 'wait'; forSelector?: string; seconds?: number }
+  /**
+   * A recorded gesture, captured by an authoring tool: the user's real pointer
+   * movement, clicks/drags and scrolling, replayed verbatim during the render
+   * through Chrome's input pipeline (plus a drawn cursor — see `page.cursor`).
+   * The RAW samples are stored so future smoothing/interpolation can re-resolve
+   * them without re-recording; resolution to frames lives in
+   * `shared/gesture-core.js`.
+   */
+  | {
+      type: 'record';
+      /**
+       * Parallel arrays, one entry per sample: t = ms from recording start
+       * (non-decreasing), x/y = pointer position in viewport CSS px,
+       * s = window.scrollY.
+       */
+      samples: { t: number[]; x: number[]; y: number[]; s: number[] };
+      /** Sparse left-button edges, chronological; the first must be 'down'. */
+      buttons?: Array<{ t: number; action: 'down' | 'up' }>;
+      /**
+       * The viewport this was recorded at. A render at a different size is
+       * refused: breakpoints make it a different page, so the recorded
+       * coordinates and scroll offsets would land on the wrong things.
+       */
+      viewport: { width: number; height: number; dpr?: number };
+      /** Seconds to dwell after the replay ends. Default 0. */
+      hold?: number;
+    };
 
 export type TimelineEntry = Segment | Step;
 
@@ -157,6 +184,12 @@ export type Config = {
     clock?: 'virtual' | 'real';
     /** Pause and seek CSS/WAAPI animations per frame. Default true. */
     seekAnimations?: boolean;
+    /**
+     * Draw a cursor sprite during recorded-gesture replay, so the gesture is
+     * visible in the video (screenshots never contain the real pointer).
+     * Input is still dispatched when false. Default true.
+     */
+    cursor?: boolean;
     video?: VideoMode;
     /** Extra CSS injected before the page's own scripts run. */
     css?: string;
@@ -237,6 +270,7 @@ export type Resolved = {
     hideOverlays: boolean;
     clock: 'virtual' | 'real';
     seekAnimations: boolean;
+    cursor: boolean;
     video: VideoMode;
     css: string;
     script: string;
