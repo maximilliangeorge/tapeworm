@@ -40,10 +40,17 @@ async function startWorker(cfg: Resolved, chromePath: string): Promise<Worker> {
  * transition is playing). No offset is imposed and no drift is checked, because
  * whatever the page does with the scroll during its transition is the content.
  */
-async function captureFrame(session: Session, y: number, tSec: number, cfg: Resolved): Promise<Buffer> {
+async function captureFrame(
+  session: Session,
+  y: number,
+  tSec: number,
+  cfg: Resolved,
+  cursor?: { x: number; y: number; down: boolean } | null,
+): Promise<Buffer> {
   const free = Number.isNaN(y);
+  const cursorArg = cursor === undefined ? '' : `, ${JSON.stringify(cursor)}`;
   const result = await session.eval<any>(
-    `window.__sr.frame(${free ? 'null' : y}, ${tSec}, ${cfg.prewarm.imageBudget})`,
+    `window.__sr.frame(${free ? 'null' : y}, ${tSec}, ${cfg.prewarm.imageBudget}${cursorArg})`,
     true,
     Math.max(20_000, cfg.prewarm.imageBudget + 15_000),
   );
@@ -232,7 +239,13 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   }
 
   if (track.sequential) {
-    notes.push(`timeline has ${track.actions.length} interaction${track.actions.length === 1 ? '' : 's'} — rendering sequentially`);
+    const parts: string[] = [];
+    if (track.actions.length > 0) {
+      parts.push(`${track.actions.length} interaction${track.actions.length === 1 ? '' : 's'}`);
+    }
+    const recorded = track.pointer.filter((p) => p !== null).length;
+    if (recorded > 0) parts.push(`${recorded} recorded pointer frame${recorded === 1 ? '' : 's'}`);
+    notes.push(`timeline has ${parts.join(' and ')} — rendering sequentially`);
   }
 
   const strobeAt = strobeThreshold(cfg.height, cfg.fps, cfg.dpr);
@@ -287,12 +300,16 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         if (!isPng) segments[shard] = segPath;
         await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
 
-        // Scroll offset the pointer is sitting at after an interaction, or null
-        // when it's parked. The pointer stays put while the offset holds (its
-        // hover/active state on the target is part of the shot) and is parked
-        // the moment the scroll moves — including onto free frames, where the
-        // router sweeps the page under it mid-transition.
+        // Scroll offset the pointer is sitting at after an interaction or a
+        // recorded frame, or null when it's parked. The pointer stays put
+        // while the offset holds (its hover/active state on the target is part
+        // of the shot) and is parked the moment the scroll moves — including
+        // onto free frames, where the router sweeps the page under it
+        // mid-transition. Chrome re-computes :hover from the last pointer
+        // position on every scroll, so a stale point would smear hover states
+        // across whatever passes under it.
         let pointerAt: number | null = null;
+        let cursorShown = false;
         for (let n = from; n < to; n++) {
           const y = track.offsets[n];
           const t = n / cfg.fps;
@@ -310,20 +327,81 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
               await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
             }
           }
-          if (pointerAt !== null && (Number.isNaN(y) || y !== pointerAt)) {
+
+          // A recorded frame owns the mouse: scroll first so the hover
+          // computation the events trigger sees THIS frame's layout (the same
+          // order performAction uses), then the movement, then any button
+          // edges at their own recorded points. No settling sleep — everything
+          // asynchronous the handlers start belongs to the virtual clock and
+          // is driven by the frame() eval that follows, which also
+          // birth-stamps any transition these events just triggered.
+          const ptr = track.pointer[n];
+          let cursor: { x: number; y: number; down: boolean } | null | undefined;
+          if (ptr) {
+            await worker.session.eval(`window.__sr.setScroll(${y})`);
+            const hasUp = ptr.edges?.some((e) => e.kind === 'up') ?? false;
+            let wasAt = '';
+            if (hasUp) {
+              // a recorded click may hit a link; navigation mid-recording is
+              // not replayable (the rest of the samples belong to the page
+              // that is now gone), so detect it and say what to do instead
+              await worker.session.eval('window.__srNavProbe = true').catch(() => {});
+              wasAt = await worker.session.eval<string>('location.href').catch(() => '');
+            }
+            await worker.session.send('Input.dispatchMouseEvent', {
+              type: 'mouseMoved',
+              x: Math.round(ptr.x),
+              y: Math.round(ptr.y),
+              button: 'none',
+              buttons: ptr.down ? 1 : 0,
+            });
+            for (const edge of ptr.edges ?? []) {
+              await worker.session.send('Input.dispatchMouseEvent', {
+                type: edge.kind === 'down' ? 'mousePressed' : 'mouseReleased',
+                x: Math.round(edge.x),
+                y: Math.round(edge.y),
+                button: 'left',
+                clickCount: 1,
+                buttons: edge.kind === 'down' ? 1 : 0,
+              });
+            }
+            // Force a style recalc NOW, so any CSS transition the input just
+            // triggered (:hover in or out) exists before frame() birth-stamps
+            // animations — otherwise its creation races the first
+            // seekAnimations and the birth can land a frame late.
+            await worker.session.eval('void (document.body && document.body.offsetHeight)').catch(() => {});
+            if (hasUp) {
+              const sameDocument = await worker.session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
+              const nowAt = sameDocument ? await worker.session.eval<string>('location.href').catch(() => wasAt) : '';
+              if (!sameDocument || nowAt !== wasAt) {
+                throw new Error(
+                  `a recorded click navigated (frame ${n}) — recorded clicks that navigate aren't replayable, ` +
+                    `because the rest of the recording belongs to the page that just left. ` +
+                    `Use a "click" step for the navigation, then record on the destination.`,
+                );
+              }
+            }
+            pointerAt = y;
+            cursor = { x: ptr.x, y: ptr.y, down: ptr.down };
+            cursorShown = true;
+          } else if (pointerAt !== null && (Number.isNaN(y) || y !== pointerAt)) {
             await parkPointer(worker.session);
             pointerAt = null;
+            if (cursorShown) {
+              cursor = null; // hide the drawn cursor along with the real one
+              cursorShown = false;
+            }
           }
           let png: Buffer;
           try {
-            png = await captureFrame(worker.session, y, t, cfg);
+            png = await captureFrame(worker.session, y, t, cfg, cursor);
           } catch (e) {
             if (e instanceof ScrollDrift) {
               if (drift.length < 3) drift.push(`frame ${n}: ${e.message}`);
               // Re-assert and take the frame anyway — one drifted frame is better
               // than no render, and the note tells you it happened.
               await worker.session.eval(`window.__sr.setScroll(${y})`).catch(() => {});
-              png = await captureFrame(worker.session, y, t, cfg).catch(() => Buffer.alloc(0));
+              png = await captureFrame(worker.session, y, t, cfg, cursor).catch(() => Buffer.alloc(0));
               if (png.length === 0) throw e;
             } else throw e;
           }
