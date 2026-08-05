@@ -446,11 +446,18 @@ window.__sr = {
     } catch (e) {}
     return n;
   },
-  /** Render one frame. Returns once the page is visually settled for it. */
+  /**
+   * Render one frame. Returns once the page is visually settled for it.
+   *
+   * y=null is a FREE frame: the scroll is left wherever the page has it. Used
+   * while a client-side router transition plays — the router owns the scroll
+   * (old view still at the click offset, jump-to-top when the new view mounts),
+   * and imposing an offset would fight it on camera.
+   */
   async frame(y, tSec, imageBudgetMs) {
     mode = 'stepped';
     vnow = tSec * 1000;
-    const actual = setScroll(y);
+    const actual = y == null ? window.scrollY : setScroll(y);
     flush();                    // timers + rAF at the virtual timestamp — this is
                                 // where IntersectionObserver-driven reveals get added
     seekAnimations(vnow);       // ...so seek after the flush, not before

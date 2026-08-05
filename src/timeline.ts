@@ -12,31 +12,58 @@
 import type { Session } from './cdp.ts';
 import type { Anchor, Resolved, Step } from './types.ts';
 import { autoDuration, DEFAULT_EASE, resolveEase } from './easing.ts';
+import { sleep, SOFT_NAV_QUIET_MS } from './page.ts';
 
 /** Seconds the timeline dwells after an interaction, letting what it triggered animate. */
 export const DEFAULT_SETTLE = 0.6;
 
 export type Track = {
-  /** Scroll offset for each frame, already snapped to the device-pixel grid. */
+  /**
+   * Scroll offset for each frame, already snapped to the device-pixel grid.
+   * NaN marks a FREE frame — the page owns the scroll there, because a
+   * client-side route transition is playing and the router moves the scroll
+   * itself (old view still at the click offset, jump-to-top at mount).
+   */
   offsets: number[];
   /**
-   * Interaction steps (click/hover/wait) pinned to the frame where they fire.
-   * Empty until interactions are executable; when populated, frames stop being
-   * independent and the track must render sequentially.
+   * Interaction steps (click/hover/wait) pinned to the frame where they fire,
+   * and to the scroll offset they fire AT. That offset is where the timeline
+   * stood just before the interaction, which is not `offsets[frame]`: a click
+   * that navigates puts the settle frames — frame included — at the top of the
+   * destination, so replaying it from the frame's own offset would aim at
+   * whatever happens to sit there. Empty until interactions are executable;
+   * when populated, frames stop being independent and the track must render
+   * sequentially.
    */
-  actions: Array<{ frame: number; step: Step }>;
+  actions: Array<{ frame: number; at: number; step: Step }>;
   /** actions.length > 0 — the hook that forces jobs=1, like prewarm cache/none. */
   sequential: boolean;
   /** Human-readable description of what happens when. */
   plan: string[];
 };
 
-async function resolve(session: Session, a: Anchor): Promise<number> {
-  const v = await session.eval<number>(`window.__sr.resolveAnchor(${JSON.stringify(a)})`);
-  if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new Error(`could not resolve anchor ${JSON.stringify(a)}`);
+/**
+ * How long to keep asking for an anchor once an interaction has been performed.
+ * Before that the page is static and a miss is a bad selector, worth reporting
+ * immediately; after it the page may still be mid-transition — a router mounting
+ * a view, a modal opening, a tab revealing its panel — and the element is on its
+ * way. The wait costs nothing when the anchor is already there.
+ */
+const POST_ACTION_ANCHOR_WAIT = 5_000;
+
+async function resolve(session: Session, a: Anchor, waitMs = 0): Promise<number> {
+  const deadline = Date.now() + waitMs;
+  let failure: Error = new Error(`could not resolve anchor ${JSON.stringify(a)}`);
+  for (;;) {
+    try {
+      const v = await session.eval<number>(`window.__sr.resolveAnchor(${JSON.stringify(a)})`);
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+    } catch (e) {
+      failure = e as Error; // the page reports WHY it missed — keep its message
+    }
+    if (Date.now() >= deadline) throw failure;
+    await sleep(250);
   }
-  return v;
 }
 
 function describe(a: Anchor): string {
@@ -73,10 +100,15 @@ export type BuildOptions = {
    * Actually perform a click/hover while the track is being built. Without
    * this, anchors that only exist on the page a click navigates TO cannot
    * resolve — the walk has to take the click to see the other side. The
-   * callback reports whether the document changed (scroll resets to 0 there,
-   * and everything after resolves against the new page).
+   * callback reports whether the page changed (scroll resets to 0 there, and
+   * everything after resolves against the new page); for a client-side route
+   * change it also reports `sameDocument` and how long the transition took,
+   * which sizes the settle so the transition fits on camera.
    */
-  perform?: (step: Step & { type: 'click' | 'hover' }, y: number) => Promise<{ navigated: boolean }>;
+  perform?: (
+    step: Step & { type: 'click' | 'hover' },
+    y: number,
+  ) => Promise<{ navigated: boolean; sameDocument?: boolean; waitedMs?: number }>;
 };
 
 export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOptions = {}): Promise<Track> {
@@ -92,6 +124,8 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
   const plan: string[] = [];
   const quantum = 1 / cfg.dpr; // Chrome stores scroll offsets on the device-pixel grid
   const snap = (y: number) => Math.round(y / quantum) * quantum;
+
+  let interacted = false; // once true, anchors get time to appear (see resolve)
 
   const first = steps[0];
   if (first.type !== 'start') throw new Error('timeline must begin with a "start" step');
@@ -117,19 +151,38 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
       // the actual CDP input); the settle frames dwell here while whatever it
       // triggered animates — the birth-time machinery in runtime.ts picks any
       // new animation up at the right frame automatically.
-      actions.push({ frame: offsets.length, step });
+      actions.push({ frame: offsets.length, at: snap(y), step });
       // Performing it NOW is what lets later anchors resolve on whatever page
       // the click leads to. A navigation puts the new document at scroll 0.
       const performed = opts.perform ? await opts.perform(step, y) : { navigated: false };
+      if (opts.perform) interacted = true;
       if (performed.navigated) y = 0;
-      const settle = step.settle ?? DEFAULT_SETTLE;
+
+      // A client-side route change plays its transition ON CAMERA during the
+      // capture pass, across these settle frames. Two consequences: an unset
+      // settle stretches to the transition just measured (the quiet-detection
+      // tail is silence, not transition, so it comes off), and the frames are
+      // FREE — the router owns the scroll while it swaps views, and imposing
+      // an offset would yank the outgoing view around mid-transition.
+      const soft = performed.navigated && performed.sameDocument === true;
+      const measuredSec = soft && performed.waitedMs
+        ? Math.max(0, performed.waitedMs - SOFT_NAV_QUIET_MS) / 1000
+        : 0;
+      const settle = step.settle
+        ?? (soft ? Math.min(4, Math.max(DEFAULT_SETTLE, Math.ceil(measuredSec * 10) / 10)) : DEFAULT_SETTLE);
       const settleFrames = Math.max(1, Math.round(settle * cfg.fps));
-      for (let f = 0; f < settleFrames; f++) offsets.push(snap(y));
+      for (let f = 0; f < settleFrames; f++) offsets.push(soft ? NaN : snap(y));
       plan.push(
         `${startT.toFixed(2)}s  ${step.type} ${describe(step.target)}` +
-          (performed.navigated ? ' → navigates' : '') +
+          (performed.navigated ? (soft ? ' → navigates (client-side route)' : ' → navigates') : '') +
           `, settle ${settle.toFixed(2)}s`,
       );
+      if (soft && step.settle != null && step.settle < measuredSec) {
+        plan.push(
+          `       ⚠ the route transition ran ~${measuredSec.toFixed(1)}s while planning but settle is ` +
+            `${step.settle.toFixed(2)}s — the timeline may take the scroll back mid-transition; raise settle to film it fully`,
+        );
+      }
       continue;
     }
 
@@ -138,7 +191,7 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
       throw new Error(`timeline[${i}]: "${step.type}" steps are not executable yet`);
     }
 
-    const target = await resolve(session, step.to);
+    const target = await resolve(session, step.to, interacted ? POST_ACTION_ANCHOR_WAIT : 0);
     const from = y;
     const distance = target - from;
     const ease = resolveEase(step.ease, Math.abs(distance) / cfg.height);
@@ -171,9 +224,19 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
  * because it's invisible until you watch the render.
  */
 export function peakStep(track: Track, dpr: number): number {
+  // A navigating interaction jumps from where it fired to the top of the
+  // destination. That's a cut between two pages, not motion, so measuring it as
+  // per-frame displacement would report strobing on every such timeline. Free
+  // frames (NaN, a route transition playing) aren't ours to measure either.
+  const cuts = new Set(
+    track.actions.filter((a) => track.offsets[a.frame] !== a.at).map((a) => a.frame),
+  );
   let peak = 0;
   for (let i = 1; i < track.offsets.length; i++) {
-    peak = Math.max(peak, Math.abs(track.offsets[i] - track.offsets[i - 1]) * dpr);
+    if (cuts.has(i)) continue;
+    const d = Math.abs(track.offsets[i] - track.offsets[i - 1]) * dpr;
+    if (Number.isNaN(d)) continue;
+    peak = Math.max(peak, d);
   }
   return peak;
 }

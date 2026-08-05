@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { launch } from './browser.ts';
 import type { Connection, Session } from './cdp.ts';
 import { concatSegments, createEncoder, createPngWriter, type Encoder } from './encode.ts';
-import { openPage, prewarm, resetPage, settleNewDocument, waitForDocumentReady } from './page.ts';
+import { openPage, prewarm, resetPage, settleNewDocument, waitForDocumentReady, waitForSoftNavigation } from './page.ts';
 import { strobeThreshold } from './easing.ts';
 import { buildTrack, peakStep, type Track } from './timeline.ts';
 import type { Resolved, Step } from './types.ts';
@@ -33,17 +33,24 @@ async function startWorker(cfg: Resolved, chromePath: string): Promise<Worker> {
   return { conn, session, notes: [...notes, ...warmNotes] };
 }
 
-/** Capture one frame. Returns the PNG bytes. */
+/**
+ * Capture one frame. Returns the PNG bytes.
+ *
+ * A NaN offset is a FREE frame — one where the page owns the scroll (a router
+ * transition is playing). No offset is imposed and no drift is checked, because
+ * whatever the page does with the scroll during its transition is the content.
+ */
 async function captureFrame(session: Session, y: number, tSec: number, cfg: Resolved): Promise<Buffer> {
+  const free = Number.isNaN(y);
   const result = await session.eval<any>(
-    `window.__sr.frame(${y}, ${tSec}, ${cfg.prewarm.imageBudget})`,
+    `window.__sr.frame(${free ? 'null' : y}, ${tSec}, ${cfg.prewarm.imageBudget})`,
     true,
     Math.max(20_000, cfg.prewarm.imageBudget + 15_000),
   );
 
   // Chrome stores scroll offsets on the device-pixel grid; anything beyond that is
   // the page fighting us (scroll anchoring, snap, a hijacker we missed).
-  if (result && Math.abs(result.actual - result.requested) > 1 / cfg.dpr + 0.001) {
+  if (!free && result && Math.abs(result.actual - result.requested) > 1 / cfg.dpr + 0.001) {
     const clampedAtEnd = result.requested >= result.max - 1;
     if (!clampedAtEnd) {
       throw new ScrollDrift(result.requested, result.actual);
@@ -64,9 +71,22 @@ async function captureFrame(session: Session, y: number, tSec: number, cfg: Reso
  * clicks won't do: they carry isTrusted=false, produce no hover/active states,
  * and many libraries ignore them.
  *
- * A click may navigate. That's detected with a marker the new document can't
- * have, and the new page is then settled and pre-warmed like any other before
- * the render goes on — the report tells the caller scroll is back at 0.
+ * A click may navigate, in either of two ways. A document load is detected with
+ * a marker the new document can't have. A client-side router instead swaps the
+ * view under the SAME document — the marker survives, so the tell is that
+ * location.href moved.
+ *
+ * What happens next depends on the phase. In the 'plan' phase (building the
+ * track) the new view must finish arriving before the anchors beyond it can
+ * resolve, so it is waited in, settled, and pre-warmed — which also loads its
+ * assets into Chrome's cache for the pass that follows. In the 'capture' phase
+ * a soft navigation returns IMMEDIATELY instead: the router's transition is
+ * content, and it films across the settle frames, driven per-frame by the
+ * virtual clock like every other animation a click starts. Waiting here is
+ * what would cut the transition out of the video. A document load still gets
+ * the full treatment in both phases — tearing down the document destroys any
+ * transition, so there is nothing to film, and the new page must be made
+ * ready before it goes on camera.
  */
 async function performAction(
   session: Session,
@@ -74,7 +94,8 @@ async function performAction(
   step: Step & { type: 'click' | 'hover' },
   y: number,
   note: (s: string) => void,
-): Promise<{ navigated: boolean }> {
+  phase: 'plan' | 'capture' = 'plan',
+): Promise<{ navigated: boolean; sameDocument: boolean; waitedMs?: number }> {
   await session.eval(`window.__sr.setScroll(${y})`);
   const target = step.target as { selector: string; nth?: number };
   const pt = await session.eval<{ found: boolean; x: number; y: number; visible: boolean }>(
@@ -83,7 +104,17 @@ async function performAction(
   if (!pt?.found) {
     throw new Error(`cannot ${step.type} "${target.selector}": selector matched nothing at that point in the timeline`);
   }
+  // actionPoint clamps into the viewport, so an off-screen target still yields a
+  // point — one sitting on top of some unrelated element. Dispatching there
+  // produces a plausible-looking render of the wrong thing, so refuse instead.
+  if (!pt.visible) {
+    throw new Error(
+      `cannot ${step.type} "${target.selector}": it is not in view at scroll ${Math.round(y)}, ` +
+        `so the ${step.type} would land on whatever else is there. Move to it before the ${step.type}.`,
+    );
+  }
   await session.eval('window.__srNavProbe = true').catch(() => {});
+  const wasAt = await session.eval<string>('location.href').catch(() => '');
   const at = { x: Math.round(pt.x), y: Math.round(pt.y) };
   await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
   if (step.type === 'click') {
@@ -94,18 +125,51 @@ async function performAction(
   // then driven per-frame by the virtual clock like everything else
   await new Promise((r) => setTimeout(r, 150));
 
-  const stillSameDocument = await session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
-  if (stillSameDocument) return { navigated: false };
+  const sameDocument = await session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
+  const nowAt = sameDocument ? await session.eval<string>('location.href').catch(() => wasAt) : '';
+  if (sameDocument && nowAt === wasAt) return { navigated: false, sameDocument: true };
 
-  // The click navigated. Wait the new document in, then give it the standard
-  // treatment — intro, consent, scroll gate, pre-warm — so the frames after
-  // this point film a ready page, not a loading one.
-  await waitForDocumentReady(session);
-  const where = await session.eval<string>('location.href').catch(() => '(unknown)');
-  note(`${step.type} on ${target.selector} navigated to ${where} — settling and pre-warming`);
+  if (sameDocument && phase === 'capture') {
+    // Filming: the transition the router just started IS the shot. The plan
+    // phase already resolved the far side and warmed its assets into the
+    // cache, so nothing needs to block here — the settle frames film the swap.
+    note(`${step.type} on ${target.selector} routed to ${nowAt} — filming the transition`);
+    return { navigated: true, sameDocument: true };
+  }
+
+  // The click navigated and this pass needs the destination READY — either the
+  // plan phase (anchors beyond this point resolve on the new view), or a
+  // document load (fresh page, must be settled before it goes on camera).
+  let waitedMs: number | undefined;
+  if (sameDocument) {
+    waitedMs = await waitForSoftNavigation(session);
+    note(
+      `${step.type} on ${target.selector} routed to ${nowAt} without a page load ` +
+        `(waited ${(waitedMs / 1000).toFixed(1)}s for the new view) — settling and pre-warming`,
+    );
+  } else {
+    await waitForDocumentReady(session);
+    const where = await session.eval<string>('location.href').catch(() => '(unknown)');
+    note(`${step.type} on ${target.selector} navigated to ${where} — settling and pre-warming`);
+  }
   for (const n of await settleNewDocument(session, cfg)) note(n);
   for (const n of await prewarm(session, cfg)) note(n);
-  return { navigated: true };
+  return { navigated: true, sameDocument, waitedMs };
+}
+
+/**
+ * Move the virtual pointer far off the viewport. Chrome keeps the last pointer
+ * position an interaction's mouseMoved left behind and re-computes :hover on
+ * every scroll, so once the timeline scrolls on, whatever passes under that
+ * stale point renders hovered — the same artifact the preview's cursor shield
+ * exists to keep out of authoring. Parking is deferred until the scroll
+ * actually moves (see the capture loop) so the interaction's own hover/active
+ * state stays on camera through its settle.
+ */
+async function parkPointer(session: Session): Promise<void> {
+  await session
+    .send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: -10_000, y: -10_000 })
+    .catch(() => {});
 }
 
 export class ScrollDrift extends Error {
@@ -223,16 +287,32 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         if (!isPng) segments[shard] = segPath;
         await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
 
+        // Scroll offset the pointer is sitting at after an interaction, or null
+        // when it's parked. The pointer stays put while the offset holds (its
+        // hover/active state on the target is part of the shot) and is parked
+        // the moment the scroll moves — including onto free frames, where the
+        // router sweeps the page under it mid-transition.
+        let pointerAt: number | null = null;
         for (let n = from; n < to; n++) {
           const y = track.offsets[n];
           const t = n / cfg.fps;
           for (const action of track.actions) {
             if (action.frame !== n) continue;
-            const r = await performAction(worker.session, cfg, action.step as Step & { type: 'click' | 'hover' }, y, note);
-            if (r.navigated) {
-              // brand-new document: fresh runtime, fresh animation state
+            // action.at, not y: the interaction fires from where the timeline
+            // stood BEFORE it, which differs from this frame's offset whenever
+            // the interaction navigates.
+            const r = await performAction(worker.session, cfg, action.step as Step & { type: 'click' | 'hover' }, action.at, note, 'capture');
+            pointerAt = action.at;
+            if (r.navigated && !r.sameDocument) {
+              // brand-new document: fresh runtime, fresh animation state. A
+              // soft navigation keeps the document — and must NOT re-arm: the
+              // transition's animations are mid-flight on their birth times.
               await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
             }
+          }
+          if (pointerAt !== null && (Number.isNaN(y) || y !== pointerAt)) {
+            await parkPointer(worker.session);
+            pointerAt = null;
           }
           let png: Buffer;
           try {

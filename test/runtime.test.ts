@@ -144,6 +144,18 @@ test('frame() applies the scroll clamped to the document', async () => {
   assert.equal(over.actual, 4200, 'clamped to maxScroll');
 });
 
+test('frame(null) is a free frame: the page keeps the scroll it has', async () => {
+  // A client-side route transition owns the scroll while it plays — the old
+  // view sits at the click offset until the router itself jumps to the top.
+  const { window, sr, settle } = boot(cfg());
+  sr.beginCapture(false);
+  await settle(sr.frame(1234, 1, 0));
+  window.scrollTo = () => { throw new Error('a free frame must not touch the scroll'); };
+  const r: { actual: number } = await settle(sr.frame(null, 1.5, 0));
+  assert.equal(r.actual, 1234, 'reports where the page actually is');
+  assert.equal(window.scrollY, 1234);
+});
+
 test('actionPoint aims at the element centre in viewport coords, clamped', () => {
   const cta = { getBoundingClientRect: () => ({ left: 100, top: 300, width: 200, height: 50, bottom: 350 }) };
   const off = { getBoundingClientRect: () => ({ left: -500, top: 2000, width: 100, height: 40, bottom: 2040 }) };

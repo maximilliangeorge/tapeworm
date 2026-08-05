@@ -147,6 +147,52 @@ export async function waitForDocumentReady(session: Session, timeoutMs = 20_000)
   }
 }
 
+/**
+ * Wait out a soft navigation — a router swapping the view with the History API
+ * rather than loading a document.
+ *
+ * There is no lifecycle event to wait on and readyState is already 'complete',
+ * so the only signal that the destination has arrived is the DOM going quiet.
+ * Routers commonly animate the outgoing view out, sit still for a beat, and
+ * only then mount the new one, so a short quiet threshold returns *during* that
+ * gap — before the content the next anchor needs exists. 750ms clears the gaps
+ * seen in the wild and still costs less than the settle that follows.
+ *
+ * Mutations are counted in the page but timed HERE: the injected runtime owns
+ * `performance.now`/`Date`, and during the capture pass those are frozen at the
+ * current frame, so page-side elapsed time would never advance.
+ */
+export const SOFT_NAV_QUIET_MS = 750;
+
+export async function waitForSoftNavigation(session: Session, timeoutMs = 15_000): Promise<number> {
+  const poll = 150;
+  const needed = SOFT_NAV_QUIET_MS / poll;
+  await session.eval(`(() => {
+    if (window.__srQuiet) window.__srQuiet.stop();
+    const state = { n: 0 };
+    const obs = new MutationObserver((rs) => { state.n += rs.length; });
+    obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    state.stop = () => obs.disconnect();
+    window.__srQuiet = state;
+  })()`).catch(() => {});
+
+  const started = Date.now();
+  let last = -1;
+  let quiet = 0;
+  while (Date.now() - started < timeoutMs) {
+    await sleep(poll);
+    const n = await session.eval<number>('window.__srQuiet ? window.__srQuiet.n : -1').catch(() => -1);
+    if (n >= 0 && n === last) {
+      if (++quiet >= needed) break;
+    } else {
+      quiet = 0;
+    }
+    last = n;
+  }
+  await session.eval('window.__srQuiet && window.__srQuiet.stop()').catch(() => {});
+  return Date.now() - started;
+}
+
 /** Return to the configured URL and get the page back into a filmable state. */
 export async function resetPage(session: Session, cfg: Resolved): Promise<string[]> {
   await navigate(session, cfg.url);

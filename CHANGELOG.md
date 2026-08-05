@@ -94,6 +94,56 @@ and the project uses [Semantic Versioning](https://semver.org/).
   core invariant that the virtual clock follows the frame index, not the wall
   clock.
 
+### Fixed
+
+- Clicks that navigate via a **client-side router** are now recognised as
+  navigation. Previously only a document load counted, so on a site whose links
+  are handled by the History API the timeline carried straight on 150ms after
+  the click — before the destination view had mounted — and any anchor on the
+  far side died with `selector matched nothing`. Such a navigation is now
+  detected by `location.href` moving. While the plan is built, the new view is
+  waited in by watching the DOM go quiet (there is no load event to wait for),
+  then settled and pre-warmed like any other page — which also loads its assets
+  into Chrome's cache for the capture pass.
+
+- The router's **page transition stays in the video**. During capture, a
+  navigating click returns immediately instead of waiting the new view in: the
+  transition plays across the settle frames, driven per-frame by the virtual
+  clock like any other animation a click starts. Those frames are *free* — the
+  page owns the scroll while the router swaps views (the outgoing view stays at
+  the click offset; the router jumps to top at mount), so no offset is imposed
+  and no scroll drift is reported there. When the click has no explicit
+  `settle`, the settle stretches to the transition duration measured while
+  planning (capped at 4s); an explicit `settle` shorter than the measured
+  transition earns a ⚠ in the plan.
+
+- A navigating click is now replayed from the scroll offset it was authored at.
+  The track pinned each interaction to a frame only, and the capture pass fired
+  it from *that frame's* offset — but a navigating click puts its own frame at
+  the top of the destination, so the click was dispatched at scroll 0 on the
+  page it was supposed to be leaving. It landed on whichever element sat there,
+  and the render was a convincing video of the wrong thing. Interactions now
+  carry the offset they fire from (`action.at`).
+
+- The pointer is **parked off-page when scrolling resumes** after a click or
+  hover. Chrome keeps the last pointer position an interaction left behind and
+  re-computes `:hover` on every scroll, so everything that scrolled past that
+  point for the rest of the render picked up hover styles — the render-side
+  twin of the preview artifact the extension's cursor shield already fixed.
+  The pointer stays on the target through the interaction's settle (its
+  hover/active state is part of the shot) and leaves the moment the timeline
+  moves on.
+
+- Clicking or hovering a target that is out of view is now an error rather than
+  a click on something else: the target point was clamped into the viewport, so
+  an off-screen element silently retargeted the interaction.
+
+- Once an interaction has been performed, an anchor that isn't there yet is
+  retried for up to 5s instead of failing on the first ask — a view mounting, a
+  modal opening, a tab revealing its panel. Anchors before the first
+  interaction still fail immediately, so a genuine typo is still reported at
+  once.
+
 ## [0.1.0] - 2026-08-04
 
 Initial version (as `scrollrec`, renamed to `tapeworm`).

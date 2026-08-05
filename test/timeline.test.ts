@@ -124,6 +124,7 @@ test('click steps pin an action to the exact frame, dwell for settle, and force 
   assert.equal(sequential, true);
   assert.equal(actions.length, 1);
   assert.equal(actions[0].frame, 10, 'fires right after the 1s start hold @10fps');
+  assert.equal(actions[0].at, 0, 'fires from where the timeline stood');
   assert.equal(actions[0].step.type, 'click');
   // 10 start + 20 settle + 10 move + 5 hold
   assert.equal(offsets.length, 45);
@@ -164,6 +165,132 @@ test('a navigating click: later anchors resolve on the NEW page, settle dwells a
   assert.deepEqual(track.offsets.slice(10, 20), Array(10).fill(0), 'settle dwells at the new page top');
   assert.equal(track.offsets[29], 1200, 'the move lands on the new-page anchor');
   assert.match(track.plan[1], /click a\.nav → navigates/);
+});
+
+test('a navigating click records the scroll it fires FROM, not the frame it lands on', async () => {
+  // The capture pass replays the click from action.at. Reading offsets[frame]
+  // instead would aim at scroll 0 on the destination — a click on whatever
+  // element happens to sit there, which renders as a plausible wrong video.
+  let onNewPage = false;
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      if (a === 'top') return 0;
+      if (a.selector === '.link') return 800;
+      if (a.selector === '.destination') return onNewPage ? 1200 : undefined;
+      return undefined;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'move', to: { selector: '.link' }, duration: 1, ease: 'linear', hold: 0 },
+    { type: 'click', target: { selector: '.link' }, settle: 1 },
+    { type: 'move', to: { selector: '.destination' }, duration: 1, ease: 'linear', hold: 0 },
+  ]);
+  const { actions, offsets } = await buildTrack(session, cfg, {
+    perform: async () => { onNewPage = true; return { navigated: true }; },
+  });
+  assert.equal(actions[0].at, 800, 'the click fires from the pre-click scroll offset');
+  assert.equal(offsets[actions[0].frame], 0, 'while that very frame already shows the destination at its top');
+  // 800px between two frames would read as violent strobing if it were motion —
+  // it is a cut between two pages, so it must not be measured as one.
+  assert.ok(peakStep({ offsets, actions } as Track, 2) < 800, 'the page cut is not counted as motion');
+});
+
+test('a client-side route change: settle frames are FREE and stretch to the measured transition', async () => {
+  // The capture pass films the router's transition across these frames. They
+  // must be NaN (the router owns the scroll while it swaps views) and, with no
+  // explicit settle, must cover the transition the build pass measured.
+  let onNewPage = false;
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      if (a === 'top') return 0;
+      if (a.selector === '.destination') return onNewPage ? 1200 : undefined;
+      return undefined;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: 'a.nav' } },
+    { type: 'move', to: { selector: '.destination' }, duration: 1, ease: 'linear', hold: 0.5 },
+  ]);
+  const track = await buildTrack(session, cfg, {
+    // 2750ms measured = 2.0s of transition once the 750ms quiet tail comes off
+    perform: async () => { onNewPage = true; return { navigated: true, sameDocument: true, waitedMs: 2750 }; },
+  });
+  // 10 start + 20 settle (2.0s auto-sized @10fps) + 10 move + 5 hold
+  assert.equal(track.offsets.length, 45);
+  for (let i = 10; i < 30; i++) {
+    assert.ok(Number.isNaN(track.offsets[i]), `frame ${i} should be free while the transition plays`);
+  }
+  assert.equal(track.offsets[30], 120, 'control returns after the settle (first move frame, 0 → 1200 linear)');
+  assert.equal(track.offsets[39], 1200, 'the move still lands on the new-view anchor');
+  assert.match(track.plan[1], /→ navigates \(client-side route\), settle 2\.00s/);
+  assert.ok(!Number.isNaN(peakStep(track, 2)), 'free frames are not measured as motion');
+});
+
+test('an explicit settle shorter than the route transition earns a plan warning, and is honoured', async () => {
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      return a === 'top' ? 0 : 500;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: 'a.nav' }, settle: 0.5 },
+    { type: 'move', to: { selector: '.x' }, duration: 1, ease: 'linear', hold: 0 },
+  ]);
+  const track = await buildTrack(session, cfg, {
+    perform: async () => ({ navigated: true, sameDocument: true, waitedMs: 2750 }),
+  });
+  assert.equal(track.offsets.length, 10 + 5 + 10, 'the author\'s settle wins');
+  assert.match(track.plan[2], /⚠.*transition ran ~2\.0s.*settle is 0\.50s/);
+});
+
+test('after an interaction, an anchor that arrives late is waited for rather than failed', async () => {
+  // A router mounting the destination view, a modal opening: the element is on
+  // its way, just not there on the first ask.
+  let tries = 0;
+  const session = {
+    async eval(expr: string) {
+      const m = expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s);
+      if (!m) throw new Error(`unexpected eval: ${expr}`);
+      const a = JSON.parse(m[1]);
+      if (a === 'top') return 0;
+      // the page's own error, which is what should surface if it never turns up
+      if (++tries < 3) throw new Error('selector matched nothing: .late');
+      return 900;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 0.2 },
+    { type: 'click', target: { selector: 'a.nav' }, settle: 0.2 },
+    { type: 'move', to: { selector: '.late' }, duration: 0.2, ease: 'linear', hold: 0 },
+  ]);
+  const track = await buildTrack(session, cfg, { perform: async () => ({ navigated: true }) });
+  assert.equal(tries, 3, 'kept asking until the element existed');
+  assert.equal(track.offsets[track.offsets.length - 1], 900);
+});
+
+test('the wait is only granted after an interaction, and it still reports the page\'s reason', async () => {
+  const cfg = (steps: TimelineEntry[]) => cfgWith(steps);
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      if (a === 'top') return 0;
+      throw new Error('selector matched nothing: .gone — and the text "x" is gone too');
+    },
+  } as unknown as Session;
+
+  // No interaction: a miss is a bad selector, and it fails at once.
+  const started = Date.now();
+  await assert.rejects(
+    buildTrack(session, cfg([{ at: 'top' }, { to: { selector: '.gone' } }])),
+    /selector matched nothing: \.gone/,
+  );
+  assert.ok(Date.now() - started < 1000, 'a static page fails immediately, without the retry wait');
 });
 
 test('auto mode: discovered sections become the timeline, empty discovery falls back to a full sweep', async () => {
