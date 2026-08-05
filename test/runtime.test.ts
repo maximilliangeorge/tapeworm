@@ -173,6 +173,60 @@ test('actionPoint aims at the element centre in viewport coords, clamped', () =>
   assert.equal(sr.actionPoint({ selector: '.missing' }).found, false);
 });
 
+function bootWithCursorDom(over: Partial<Config> = {}) {
+  const appended: any[] = [];
+  const booted = boot(cfg(over), {});
+  const { window } = booted;
+  window.document.createElement = () => {
+    const el: any = { className: '', innerHTML: '', style: {} };
+    return el;
+  };
+  window.document.documentElement.appendChild = (el: any) => appended.push(el);
+  return { ...booted, appended };
+}
+
+test('frame() draws the cursor sprite: positioned, pressed, hidden — and old callers leave it alone', async () => {
+  const { sr, settle, appended } = bootWithCursorDom();
+  sr.beginCapture(false);
+
+  await settle(sr.frame(0, 1, 0)); // 3-arg caller: cursor untouched
+  assert.equal(appended.length, 0, 'no cursor element until someone draws it');
+
+  await settle(sr.frame(0, 1.1, 0, { x: 100, y: 50, down: false }));
+  assert.equal(appended.length, 1, 'created lazily, on documentElement — hideOverlays only scans body');
+  const el = appended[0];
+  assert.equal(el.className, '__tw-cursor', 'the __tw- prefix keeps it out of generated selectors');
+  assert.match(el.style.cssText, /pointer-events:none/, 'never hit-tested');
+  assert.match(el.style.transform, /translate\(95px,47px\)/, 'tip of the arrow sits on the point');
+  assert.doesNotMatch(el.style.transform, /scale/);
+
+  await settle(sr.frame(0, 1.2, 0, { x: 100, y: 50, down: true }));
+  assert.match(el.style.transform, /scale\(0\.88\)/, 'press feedback');
+
+  await settle(sr.frame(0, 1.3, 0, null));
+  assert.match(el.style.transform, /-9999px/, 'null hides it');
+
+  await settle(sr.frame(0, 1.4, 0));
+  assert.match(el.style.transform, /-9999px/, 'undefined leaves it as it was');
+});
+
+test('__sr.cursor drives the same sprite by hand', () => {
+  const { sr, appended } = bootWithCursorDom();
+  sr.cursor(10, 20, false);
+  assert.equal(appended.length, 1);
+  assert.match(appended[0].style.transform, /translate\(5px,17px\)/);
+  sr.cursor(null);
+  assert.match(appended[0].style.transform, /-9999px/);
+});
+
+test('page.cursor false: input still flows but nothing is ever drawn', async () => {
+  const { sr, settle, appended } = bootWithCursorDom({ page: { cursor: false } });
+  sr.beginCapture(false);
+  await settle(sr.frame(0, 1, 0, { x: 100, y: 50, down: false }));
+  sr.cursor(100, 50, true);
+  assert.equal(appended.length, 0, 'the knob suppresses the sprite entirely');
+});
+
 test('resolveAnchor: keywords, raw offsets, and element alignment', () => {
   const hero = { getBoundingClientRect: () => ({ top: 1000, height: 400 }) };
   const { sr } = boot(cfg(), {

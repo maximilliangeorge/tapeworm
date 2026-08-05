@@ -23,7 +23,7 @@ import type { Resolved } from './types.ts';
  * template literal — so those files may contain backticks and ${} freely, and the
  * extension can ship the very same files verbatim as content scripts.
  */
-const SHARED_FILES = ['easing-core.js', 'anchor-core.js', 'selector.js'] as const;
+const SHARED_FILES = ['easing-core.js', 'anchor-core.js', 'selector.js', 'gesture-core.js'] as const;
 
 export function sharedCoreSource(): string {
   return SHARED_FILES
@@ -39,6 +39,7 @@ export function runtimeSource(cfg: Resolved): string {
     video: cfg.page.video,
     dismissConsent: cfg.page.dismissConsent,
     hideOverlays: cfg.page.hideOverlays,
+    cursor: cfg.page.cursor,
     css: cfg.page.css,
   });
 
@@ -321,6 +322,43 @@ function hideOverlays() {
   return n;
 }
 
+// ---------------------------------------------------------------- drawn cursor
+// Screenshots never contain the real pointer, so a recorded gesture is invisible
+// unless a sprite is drawn into the page. Kept out of the page's way three
+// times over: pointer-events none (no hit-testing), the __tw- class prefix
+// (the selector generator refuses those), and a documentElement parent
+// (hideOverlays only scans body children, and discoverSections roots elsewhere).
+let cursorEl = null;
+const CURSOR_TIP_X = 5, CURSOR_TIP_Y = 3; // where the arrow tip sits inside the sprite
+
+function ensureCursor() {
+  if (cursorEl) return cursorEl;
+  cursorEl = document.createElement('div');
+  cursorEl.className = '__tw-cursor';
+  cursorEl.style.cssText =
+    'position:fixed;left:0;top:0;width:22px;height:22px;z-index:2147483647;' +
+    'pointer-events:none;transform:translate(-9999px,-9999px);will-change:transform;' +
+    'transform-origin:' + CURSOR_TIP_X + 'px ' + CURSOR_TIP_Y + 'px;';
+  cursorEl.innerHTML =
+    '<svg width="22" height="22" viewBox="0 0 24 24">' +
+    '<path d="M5.5 3.2 L18.8 11.7 L12.4 12.9 L9.4 19.4 Z" ' +
+    'fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  document.documentElement.appendChild(cursorEl);
+  return cursorEl;
+}
+
+/** c = {x, y, down} places the sprite (tip on the point); null hides it. */
+function drawCursor(c) {
+  if (!OPT.cursor) return;
+  if (c == null) {
+    if (cursorEl) cursorEl.style.transform = 'translate(-9999px,-9999px)';
+    return;
+  }
+  ensureCursor().style.transform =
+    'translate(' + (c.x - CURSOR_TIP_X) + 'px,' + (c.y - CURSOR_TIP_Y) + 'px)' +
+    (c.down ? ' scale(0.88)' : '');
+}
+
 // ---------------------------------------------------------------- lazy content
 function eagerize(root) {
   if (!root || !root.querySelectorAll) return;
@@ -453,8 +491,12 @@ window.__sr = {
    * while a client-side router transition plays — the router owns the scroll
    * (old view still at the click offset, jump-to-top when the new view mounts),
    * and imposing an offset would fight it on camera.
+   *
+   * cursor: {x, y, down} draws the sprite there, null hides it, undefined
+   * (old callers) leaves it alone. Applied before the paint settle so the
+   * sprite is in the screenshot.
    */
-  async frame(y, tSec, imageBudgetMs) {
+  async frame(y, tSec, imageBudgetMs, cursor) {
     mode = 'stepped';
     vnow = tSec * 1000;
     const actual = y == null ? window.scrollY : setScroll(y);
@@ -466,8 +508,13 @@ window.__sr = {
     await videoWait;
     const loaded = await imgWait;
     seekAnimations(vnow);       // late arrivals get their birth stamped here
+    if (cursor !== undefined) drawCursor(cursor);
     await new Promise((r) => nRaf(() => nRaf(r)));   // let layout + paint settle
     return { scrollY: window.scrollY, requested: y, actual, max: maxScroll(), imagesAwaited: loaded };
+  },
+  /** Manual cursor control, same sprite frame() drives. */
+  cursor(x, y, down) {
+    drawCursor(x == null ? null : { x, y, down: !!down });
   },
   resolveAnchor,
   discoverSections,
