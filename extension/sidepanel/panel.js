@@ -24,7 +24,7 @@ let state = {
 };
 let totalSec = 0;
 let playing = false;
-let picking = null; // null | 'move' | 'click' | 'hover'
+let picking = null; // null | 'move' | 'click' | 'hover' | 'record'
 let currentPageUrl = ''; // where the tab is NOW — the timeline's url is pinned on the start step
 let lastInfo = null;     // most recent page:info payload
 let lastSpans = [];      // per-step {index, type, t0, t1} from the overlay's geometry
@@ -47,8 +47,10 @@ chrome.runtime.onMessage.addListener((msg) => {
   const d = msg.data || {};
   if (msg.type === 'picker:picked') onPicked(d);
   if (msg.type === 'picker:stopped') setPicking(null);
+  if (msg.type === 'record:done') onRecorded(d);
+  if (msg.type === 'record:cancelled') setPicking(null);
   if (msg.type === 'preview:time') onPreviewTime(d);
-  if (msg.type === 'preview:ended') { playing = false; $('play').textContent = '▶ Preview'; }
+  if (msg.type === 'preview:ended') { playing = false; $('play').textContent = '▶ Preview'; $('arm-record').disabled = false; }
   if (msg.type === 'page:info') onPageInfo(d);
 });
 
@@ -82,6 +84,18 @@ function onPicked(d) {
   } else {
     state.steps.push({ type: 'move', to: d.anchor, ease: 'natural', _quality: d.quality });
   }
+  expandedIndex = state.steps.length - 1;
+  commit();
+}
+
+function onRecorded(d) {
+  // Same url-pinning dance as onPicked: the recording belongs to THIS page.
+  const start = state.steps[0];
+  if (start && start.type === 'start' && !start.url && currentPageUrl) start.url = currentPageUrl;
+  const step = { type: 'record', samples: d.samples, viewport: d.viewport };
+  if (d.buttons && d.buttons.length) step.buttons = d.buttons;
+  state.steps.push(step);
+  setPicking(null);
   expandedIndex = state.steps.length - 1;
   commit();
 }
@@ -206,6 +220,10 @@ function renderRuler() {
     if (s.type === 'click' || s.type === 'hover') {
       seg.className = 'seg act';
       seg.textContent = s.type === 'click' ? '⊕' : '⊙';
+    } else if (s.type === 'record') {
+      seg.className = 'seg rec';
+      seg.style.flexGrow = String(secs);
+      seg.textContent = '● ' + secs.toFixed(1);
     } else if (s.type === 'move') {
       seg.className = 'seg';
       seg.style.flexGrow = String(secs);
@@ -293,6 +311,11 @@ function easeSvg(ease) {
   return svg;
 }
 
+function recDuration(step) {
+  const t = step.samples.t;
+  return t.length ? t[t.length - 1] / 1000 : 0;
+}
+
 function durLabel(step, i) {
   const s = spanFor(i);
   if (step.type === 'start') return 'hold ' + (step.hold != null ? step.hold : 0.8).toFixed(1) + 's';
@@ -300,6 +323,7 @@ function durLabel(step, i) {
   if (step.type === 'click' || step.type === 'hover') {
     return 'settle ' + (step.settle != null ? step.settle : 0.6).toFixed(1) + 's';
   }
+  if (step.type === 'record') return recDuration(step).toFixed(1) + 's';
   return s ? (s.t1 - s.t0).toFixed(1) + 's' : '…'; // move: its full slice, implicit hold included
 }
 
@@ -352,6 +376,10 @@ function renderSteps() {
     } else if (step.type === 'click' || step.type === 'hover') {
       row1.append(span('sel', (step.type === 'click' ? '⊕ ' : '⊙ ') + anchorLabel(step.target)));
       if (step._quality) row1.append(badge(step._quality));
+    } else if (step.type === 'record') {
+      const clicks = (step.buttons || []).filter((b) => b.action === 'down').length;
+      row1.append(span('sel', '● recording — ' + recDuration(step).toFixed(1) + 's · ' +
+        step.samples.t.length + ' samples' + (clicks ? ' · ' + clicks + ' click' + (clicks === 1 ? '' : 's') : '')));
     } else {
       row1.append(span('sel', step.type + ' (not executable yet)'), badge('warn'));
     }
@@ -399,6 +427,11 @@ function renderSteps() {
       t.prepend(noteLine(step.type === 'hover'
         ? 'emulated in preview; real input in render'
         : 'emulated in preview (effects persist — reload to reset); real input in render'));
+      ed.append(t);
+    } else if (step.type === 'record') {
+      ed.append(field('hold s', numInput(step.hold, '0', (v) => { step.hold = v == null ? undefined : v; commit(); })));
+      const t = tools(i);
+      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview shows scroll + cursor only'));
       ed.append(t);
     } else {
       ed.append(tools(i));
@@ -543,21 +576,31 @@ function setPicking(mode) {
   $('pick').textContent = mode === 'move' ? '✕ Stop (Esc)' : '＋ Keyframe';
   $('arm-click').classList.toggle('active', mode === 'click');
   $('arm-hover').classList.toggle('active', mode === 'hover');
+  $('arm-record').classList.toggle('active', mode === 'record');
+  $('arm-record').textContent = mode === 'record' ? '● Recording… (ESC)' : '● Record';
 }
 
 async function armPicker(mode) {
   if (picking === mode) {
     setPicking(null);
-    await send('picker:stop');
+    // stopping a recording KEEPS what was captured (record:done follows) —
+    // losing a take is worse than deleting an unwanted row
+    await send(mode === 'record' ? 'record:stop' : 'picker:stop');
     return;
   }
   setPicking(mode);
-  await send('picker:start', { mode });
+  if (mode === 'record') {
+    const r = await send('record:start');
+    if (!r || r.error) setPicking(null); // preview playing, or the page went away
+  } else {
+    await send('picker:start', { mode });
+  }
 }
 
 $('pick').addEventListener('click', () => armPicker('move'));
 $('arm-click').addEventListener('click', () => armPicker('click'));
 $('arm-hover').addEventListener('click', () => armPicker('hover'));
+$('arm-record').addEventListener('click', () => armPicker('record'));
 
 $('fit').addEventListener('click', fitWindow);
 
@@ -592,14 +635,16 @@ $('add-hold').addEventListener('click', () => {
 });
 
 $('play').addEventListener('click', async () => {
+  if (picking === 'record') return; // the overlay refuses too — recording owns the page
   if (playing) {
     playing = false;
     $('play').textContent = '▶ Preview';
+    $('arm-record').disabled = false;
     await send('preview:stop');
     return;
   }
   const r = await send('preview:play', { steps: state.steps.map(stripInternal) });
-  if (r) { playing = true; $('play').textContent = '■ Stop'; }
+  if (r) { playing = true; $('play').textContent = '■ Stop'; $('arm-record').disabled = true; }
 });
 
 for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
@@ -697,6 +742,7 @@ const CONTENT_SCRIPTS = [
   'shared/easing-core.js',
   'shared/anchor-core.js',
   'shared/selector.js',
+  'shared/gesture-core.js',
   'content/overlay.js',
   'content/bridge.js',
 ];

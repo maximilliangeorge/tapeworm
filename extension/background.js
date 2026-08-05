@@ -19,6 +19,7 @@ const CONTENT_SCRIPTS = [
   'shared/easing-core.js',
   'shared/anchor-core.js',
   'shared/selector.js',
+  'shared/gesture-core.js',
   'content/overlay.js',
   'content/bridge.js',
 ];

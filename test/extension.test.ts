@@ -45,6 +45,14 @@ test('manifest stays review-friendly: minimal permissions, no host permissions, 
   }
 });
 
+test('the two injection lists agree — worker (action click) and panel (reattach) inject the same files', () => {
+  // background.js's list isn't covered by the manifest disk-check above, so a
+  // file added only to panel.js would work from "Attach to current tab" and
+  // silently fail on the normal action-click path.
+  const listFrom = (src: string) => [...src.matchAll(/'((?:shared|content)\/[\w-]+\.js)'/g)].map((m) => m[1]);
+  assert.deepEqual(listFrom(read('extension/background.js')), listFrom(read('extension/sidepanel/panel.js')));
+});
+
 test('every extension script parses', () => {
   for (const f of ['background.js', 'content/overlay.js', 'content/bridge.js', 'sidepanel/panel.js']) {
     new vm.Script(read(`extension/${f}`)); // throws on a syntax error
