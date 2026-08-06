@@ -49,6 +49,10 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    by; the render is the truth). Clicks are skipped in the preview — no
    trusted input from a content script, and they'd mutate page state that
    scrubbing couldn't undo — but their settle time still counts.
+   **● Record** captures a stretch of real interaction until ESC, as one
+   `record` step. Clicking through a link mid-recording splits the take
+   automatically — `record` → `click` → `record` — and recording resumes on
+   the destination once it loads.
 5. Steps collapse to one line — selector, quality, a drawn easing curve, and
    the seconds the step occupies. Drag the ⠿ grip to reorder (the start step
    stays pinned first). Click a row to open its editor

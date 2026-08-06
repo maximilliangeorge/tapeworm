@@ -10,8 +10,28 @@ globalThis.__tapewormBridge = true;
 
 const O = globalThis.TapewormOverlay;
 
-O.mount((type, data) => {
+// Events travel over sendMessage rather than the lifeline port so the initial
+// mount works before the panel has connected.
+const emitToPanel = (type, data) => {
   try { chrome.runtime.sendMessage({ from: 'tapeworm-overlay', type, data }); } catch (e) {}
+};
+
+O.mount(emitToPanel);
+
+// MV3 has no "side panel closed" event, so the panel holds a lifeline Port
+// open for its whole lifetime (chrome.tabs.connect in panel.js) — the port
+// dropping IS the close signal, and the overlay unmounts instead of haunting
+// the page. A reopened panel connects again and remounts. A Set, not a flag:
+// the new panel's connect can land before the old port's disconnect fires.
+const lifelines = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'tapeworm-lifeline') return;
+  lifelines.add(port);
+  O.mount(emitToPanel);
+  port.onDisconnect.addListener(() => {
+    lifelines.delete(port);
+    if (lifelines.size === 0) O.destroy();
+  });
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

@@ -127,11 +127,13 @@ function mount(onEmit) {
 function destroy() {
   stopPicker();
   stopRecording();
-  stopPreview();
+  stopPreview(); // no keepHover: also un-hovers, stripping every __tw-hover class
+  if (hoverRulesEl) { hoverRulesEl.remove(); hoverRulesEl = null; }
   removeEventListener('resize', onResize);
   removeEventListener('scroll', onScrollOrGate);
   if (host) host.remove();
   host = null; shadow = null; els = {};
+  lastGate = null; // a later mount() must re-announce page:info
 }
 
 // ---------------------------------------------------------------- viewport match
@@ -317,11 +319,12 @@ function startRecording() {
   if (recording) return { error: 'already-recording' };
   if (preview && preview.playing) return { error: 'preview-playing' };
   stopPicker(); // ESC must mean exactly one thing at a time
-  recording = { t0: performance.now(), last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0 };
+  recording = { t0: performance.now(), last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0, clickTarget: null };
   addEventListener('pointermove', onRecPointer, { capture: true, passive: true });
   addEventListener('pointerdown', onRecDown, { capture: true, passive: true });
   addEventListener('pointerup', onRecUp, { capture: true, passive: true });
   addEventListener('keydown', onRecKey, true);
+  addEventListener('pagehide', onRecPageHide);
   if (els.recBanner) els.recBanner.style.display = 'block';
   const sample = () => {
     if (!recording) return;
@@ -347,6 +350,20 @@ function onRecDown(ev) {
   if (!recording || ev.button !== 0) return;
   onRecPointer(ev);
   recording.buttons.push({ t: Math.round(performance.now() - recording.t0), action: 'down' });
+  // If this click turns out to navigate, the take is split HERE and the click
+  // becomes its own step — which needs a selector. Capture it now, while the
+  // element (and the document) still exists; only the last one can matter.
+  recording.clickTarget = null;
+  try {
+    const el = pickableAt(ev.clientX, ev.clientY);
+    const best = el ? S.bestSelector(el) : null;
+    if (best) {
+      const anchor = { selector: best.selector };
+      if (best.nth) anchor.nth = best.nth;
+      if (best.fallbackText) anchor.fallbackText = best.fallbackText;
+      recording.clickTarget = { anchor, quality: best.quality };
+    }
+  } catch (e) {}
 }
 
 function onRecUp(ev) {
@@ -367,8 +384,40 @@ function teardownRecording() {
   removeEventListener('pointerdown', onRecDown, true);
   removeEventListener('pointerup', onRecUp, true);
   removeEventListener('keydown', onRecKey, true);
+  removeEventListener('pagehide', onRecPageHide);
   if (recording && recording.raf) cancelAnimationFrame(recording.raf);
   if (els.recBanner) els.recBanner.style.display = 'none';
+}
+
+/**
+ * The captured take as a record:done payload, rebased so the first sample is
+ * t=0 (the lead time before the pointer was first seen is dead air nobody
+ * wants in the video). `cutoffMs` — in raw recording time — cuts the take
+ * short: samples after it and button edges at or after it are dropped, which
+ * is how a split ends a take just before the click that navigated. null when
+ * fewer than 2 samples survive.
+ */
+function buildTake(rec, cutoffMs) {
+  let n = rec.t.length;
+  if (cutoffMs != null) { while (n > 0 && rec.t[n - 1] > cutoffMs) n--; }
+  if (n < 2) return null;
+  const base = rec.t[0];
+  const t = rec.t.slice(0, n).map((v) => v - base);
+  const lastT = t[t.length - 1];
+  const buttons = rec.buttons
+    .filter((b) => cutoffMs == null || b.t < cutoffMs)
+    .map((b) => ({ t: Math.min(Math.max(b.t - base, 0), lastT), action: b.action }))
+    // a press armed before the first sample has no position to land on; a
+    // recording also can't start mid-drag, so drop a leading orphaned 'up'
+    .filter((b, i) => !(i === 0 && b.action === 'up'));
+  return {
+    samples: { t, x: rec.x.slice(0, n), y: rec.y.slice(0, n), s: rec.s.slice(0, n) },
+    buttons: buttons.length ? buttons : undefined,
+    // the ACTUAL viewport, not settings: the render refuses a mismatch, and
+    // an honest stamp is what makes that check mean something
+    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+    durationMs: lastT,
+  };
 }
 
 function finishRecording() {
@@ -376,24 +425,38 @@ function finishRecording() {
   const rec = recording;
   recording = null;
   teardownRecording();
-  if (rec.t.length < 2) { emit('record:cancelled', {}); return; }
-  // Rebase so the first sample is t=0: the lead time before the pointer was
-  // first seen is dead air nobody wants in the video.
-  const base = rec.t[0];
-  const t = rec.t.map((v) => v - base);
-  const lastT = t[t.length - 1];
-  const buttons = rec.buttons
-    .map((b) => ({ t: Math.min(Math.max(b.t - base, 0), lastT), action: b.action }))
-    // a press armed before the first sample has no position to land on; a
-    // recording also can't start mid-drag, so drop a leading orphaned 'up'
-    .filter((b, i, all) => !(i === 0 && b.action === 'up'));
-  emit('record:done', {
-    samples: { t, x: rec.x, y: rec.y, s: rec.s },
-    buttons: buttons.length ? buttons : undefined,
-    // the ACTUAL viewport, not settings: the render refuses a mismatch, and
-    // an honest stamp is what makes that check mean something
-    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
-    durationMs: lastT,
+  const take = buildTake(rec);
+  if (take) emit('record:done', take);
+  else emit('record:cancelled', {});
+}
+
+/**
+ * The document is being torn down mid-recording: a recorded click navigated
+ * (or the user reloaded / typed a URL). The samples from here on can never be
+ * captured, and the ones after the last click show a page on its way out. So
+ * the take is SPLIT at that click — everything before it stays a record step,
+ * the click itself becomes a click step (a real navigation at render time,
+ * exactly like an authored one), and the panel resumes recording on the
+ * destination. When no recorded click can be blamed, the take is simply
+ * finished as-is. Emitted synchronously — this is the page's last breath, an
+ * async hop would lose the take.
+ */
+function onRecPageHide() {
+  if (!recording) return;
+  const rec = recording;
+  recording = null;
+  teardownRecording();
+  const downs = rec.buttons.filter((b) => b.action === 'down');
+  const lastDown = downs[downs.length - 1];
+  if (!lastDown || !rec.clickTarget) {
+    const take = buildTake(rec);
+    if (take) emit('record:done', take);
+    else emit('record:cancelled', {});
+    return;
+  }
+  emit('record:split', {
+    take: buildTake(rec, lastDown.t), // null when the click came almost immediately
+    click: rec.clickTarget,
   });
 }
 

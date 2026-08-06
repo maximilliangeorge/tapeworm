@@ -79,7 +79,7 @@ function fakeEl(): any {
   };
   el.appendChild = (c: unknown) => { el.children.push(c); return c; };
   el.append = (...cs: unknown[]) => { el.children.push(...cs); };
-  el.remove = () => {};
+  el.remove = () => { el.__removed = true; };
   el.attachShadow = () => fakeEl();
   return el;
 }
@@ -208,6 +208,46 @@ test('preview emulates hover: marker class applied at hover time, cleared by lat
   assert.ok(!classes.has('__tw-hover'), 'stopping the preview clears it');
 });
 
+test('destroy leaves no trace in the page, and a later mount starts clean', () => {
+  const classes = new Set<string>();
+  const menu: any = {
+    nodeType: 1,
+    parentElement: null,
+    getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+    classList: {
+      add: (c: string) => classes.add(c),
+      remove: (c: string) => classes.delete(c),
+    },
+  };
+  const w = bootOverlay({ queries: { '.menu': [menu] } });
+  const O = w.TapewormOverlay;
+  const events: Array<[string, any]> = [];
+  O.mount((t: string, d: any) => events.push([t, d]));
+  // seeking into a hover span creates BOTH page-side artifacts: the cloned
+  // :hover rules sheet on documentElement and the marker class on the element
+  O.seek([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'hover', target: { selector: '.menu' }, settle: 1 },
+  ], 1.5);
+  assert.ok(classes.has('__tw-hover'));
+
+  O.destroy();
+  assert.ok(!classes.has('__tw-hover'), 'destroy un-hovers the page');
+  // everything the overlay appended to documentElement (the host, the cloned
+  // :hover rules sheet) is removed again
+  const appended = w.document.documentElement.children;
+  assert.ok(appended.length >= 2, 'host and hover rules sheet were appended');
+  for (const el of appended) assert.ok(el.__removed, 'appended element removed on destroy');
+
+  events.length = 0;
+  w.__dispatch('scroll', {});
+  w.__dispatch('resize', {});
+  assert.equal(events.length, 0, 'page listeners were removed');
+
+  O.mount((t: string, d: any) => events.push([t, d]));
+  assert.ok(events.some(([t]) => t === 'page:info'), 'remount announces the page again');
+});
+
 test('record mode: real input is sampled per display frame, ESC finishes with one record:done', () => {
   const w = bootOverlay();
   const O = w.TapewormOverlay;
@@ -265,6 +305,103 @@ test('record mode: nothing captured means record:cancelled, not an empty step', 
   w.__dispatch('keydown', { key: 'Escape', preventDefault: () => {}, stopImmediatePropagation: () => {} });
   assert.ok(events.some(([t]) => t === 'record:cancelled'));
   assert.ok(!events.some(([t]) => t === 'record:done'));
+});
+
+test('a navigation mid-recording splits the take at the last click: record + click target, cleanly cut', () => {
+  const link: any = {
+    nodeType: 1,
+    id: 'cta',
+    tagName: 'A',
+    className: '',
+    innerText: 'Read more',
+    getAttribute: () => null,
+  };
+  const w = bootOverlay({ queries: { '#cta': [link] } });
+  w.document.elementFromPoint = () => link;
+  const O = w.TapewormOverlay;
+  const events: Array<[string, any]> = [];
+  O.mount((t: string, d: any) => events.push([t, d]));
+
+  w.__setNow(0);
+  O.startRecording();
+  w.__dispatch('pointermove', { clientX: 100, clientY: 50 });
+  w.__pumpRaf(); // t=0
+  w.__setNow(100); w.scrollY = 40;
+  w.__dispatch('pointermove', { clientX: 110, clientY: 60 });
+  w.__pumpRaf(); // t=100
+  w.__setNow(200);
+  w.__pumpRaf(); // t=200
+  w.__setNow(300);
+  w.__dispatch('pointerdown', { button: 0, clientX: 120, clientY: 70 });
+  w.__pumpRaf(); // t=300 — the click that will navigate
+  w.__setNow(350);
+  w.__dispatch('pointerup', { button: 0 });
+  w.__pumpRaf(); // t=350 — dying-page tail, must be cut
+  w.__setNow(400);
+  w.__dispatch('pagehide', {});
+
+  assert.ok(!events.some(([t]) => t === 'record:done'), 'a split is not a normal finish');
+  const splits = events.filter(([t]) => t === 'record:split');
+  assert.equal(splits.length, 1, 'exactly one record:split');
+  const d = splits[0][1];
+  // the take ends AT the navigating click's press — the cursor lands on the
+  // link, then the click step (not the recording) performs the navigation
+  assert.deepEqual(plain(d.take.samples.t), [0, 100, 200, 300]);
+  assert.deepEqual(plain(d.take.samples.x), [100, 110, 110, 120]);
+  assert.deepEqual(plain(d.take.samples.s), [0, 40, 40, 40]);
+  assert.equal(d.take.buttons, undefined, 'the navigating click is the click step\'s, not the recording\'s');
+  assert.equal(d.take.durationMs, 300);
+  assert.deepEqual(plain(d.click), {
+    anchor: { selector: '#cta', fallbackText: 'Read more' },
+    quality: 'id',
+  });
+
+  // the recording is fully torn down: further input goes nowhere
+  w.__dispatch('pointermove', { clientX: 999, clientY: 999 });
+  w.__pumpRaf();
+  assert.equal(events.filter(([t]) => t === 'record:split').length, 1);
+});
+
+test('a navigation mid-recording with no recorded click keeps the take as a normal record:done', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  const events: Array<[string, any]> = [];
+  O.mount((t: string, d: any) => events.push([t, d]));
+
+  w.__setNow(0);
+  O.startRecording();
+  w.__dispatch('pointermove', { clientX: 100, clientY: 50 });
+  w.__pumpRaf();
+  w.__setNow(100);
+  w.__pumpRaf();
+  w.__dispatch('pagehide', {}); // reload / typed URL — nothing to blame a split on
+
+  assert.ok(!events.some(([t]) => t === 'record:split'));
+  const done = events.filter(([t]) => t === 'record:done');
+  assert.equal(done.length, 1, 'what was captured is kept');
+  assert.deepEqual(plain(done[0][1].samples.t), [0, 100]);
+});
+
+test('a click that navigates before two samples exist still splits — with the click alone, no take', () => {
+  const link: any = {
+    nodeType: 1, id: 'cta', tagName: 'A', className: '', innerText: 'Go', getAttribute: () => null,
+  };
+  const w = bootOverlay({ queries: { '#cta': [link] } });
+  w.document.elementFromPoint = () => link;
+  const O = w.TapewormOverlay;
+  const events: Array<[string, any]> = [];
+  O.mount((t: string, d: any) => events.push([t, d]));
+
+  w.__setNow(0);
+  O.startRecording();
+  w.__dispatch('pointerdown', { button: 0, clientX: 120, clientY: 70 });
+  w.__pumpRaf(); // the one and only sample, at the press itself
+  w.__dispatch('pagehide', {});
+
+  const splits = events.filter(([t]) => t === 'record:split');
+  assert.equal(splits.length, 1);
+  assert.equal(splits[0][1].take, null, 'no replayable material before the click');
+  assert.equal(plain(splits[0][1].click.anchor.selector), '#cta');
 });
 
 test('record mode and preview playback exclude each other', () => {

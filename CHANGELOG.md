@@ -18,6 +18,19 @@ and the project uses [Semantic Versioning](https://semver.org/).
   CSS px (default 32). `--cursor <image>` sets it from the CLI;
   `--cursor none` hides the sprite. `true`/`false` behave as before.
 
+- **Recordings survive navigation.** A recorded click that triggers a
+  client-side route change now replays: a recording with clicks is performed
+  while the plan is built (like click steps), so the routed-to view is settled,
+  pre-warmed, and resolvable for later anchors, and the capture pass films
+  straight through the transition instead of refusing. A recorded click that
+  loads a new document is still refused — but at plan time now, before a
+  capture pass is wasted, and in practice you won't see it: when a recorded
+  click navigates to a new document, the extension **splits the take at that
+  click automatically** — everything before it stays a `record` step, the
+  click becomes a `click` step, and recording resumes on the destination once
+  it loads. `tapeworm author` does the same, and also re-attaches its overlay
+  after any navigation (previously a navigation ended authoring).
+
 - **Record mode** — capture a stretch of real interaction as one timeline
   step. Arm **● Record** in the extension (or press `r` in `tapeworm author`),
   hover around, click, drag and scroll on the page, press **ESC**, and the
@@ -27,8 +40,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
   the gesture is visible on camera (`page.cursor: false` hides it). Recorded
   scroll becomes the scroll track for those frames. Recordings force
   `jobs: 1` like the other interactions; a render at a different viewport
-  than the recording's is refused (breakpoints make it a different page), and
-  a recorded click that navigates is refused — use a `click` step for that.
+  than the recording's is refused (breakpoints make it a different page).
+  Recorded clicks may navigate — see the entry above.
   Raw samples stay in the config so future smoothing can re-resolve them
   without re-recording (resolution lives in `shared/gesture-core.js`,
   currently linear interpolation). The extension preview replays a
@@ -126,6 +139,21 @@ and the project uses [Semantic Versioning](https://semver.org/).
   what the picked step does rather than the timeline concept behind it.
 
 ### Fixed
+
+- Extension: **▶ Preview returns to the start URL first**. If authoring
+  navigated the tab away from the page the timeline is pinned to (trying out
+  a click that navigates, or plain browsing), Preview now brings the tab back
+  to the start step's url, re-attaches the overlay, and then plays — matching
+  where a render actually begins. Previously the preview played over whatever
+  page the tab happened to be on, where the timeline's anchors don't resolve.
+
+- Extension: **closing the side panel now unmounts the overlay** from the page.
+  The panel holds a lifeline port open to the content script; when the panel
+  closes (MV3 has no close event, so the port dropping is the signal), the
+  overlay tears down — badge, highlight, banners, the cloned `:hover` rules
+  sheet, any lingering `__tw-hover` marker classes, and its page listeners all
+  go with it. Previously they stayed in the DOM until the page was reloaded.
+  Reopening the panel remounts the overlay.
 
 - Clicks that navigate via a **client-side router** are now recognised as
   navigation. Previously only a document load counted, so on a site whose links

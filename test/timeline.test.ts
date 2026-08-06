@@ -364,6 +364,59 @@ test('a record step: button edges land on their frames, in order; sequential wit
   assert.match(track.plan[1], /replay recording \(1\.00s, 3 samples, 1 click\)/);
 });
 
+test('a recording with clicks is replayed at build time: the gesture callback gets the resolved frames', async () => {
+  const cfg = cfgWith([{ type: 'start', at: 'top', hold: 1 }, REC]);
+  const got: Array<{ y: number; ptr: any }> = [];
+  const track = await buildTrack(fakeSession(), cfg, {
+    performGesture: async (step, rec) => {
+      assert.equal(step.type, 'record');
+      got.push(...rec);
+      return { navigations: 0 };
+    },
+  });
+  assert.equal(got.length, 10, 'one entry per recording frame (1s @10fps)');
+  // the callback sees exactly what the capture pass will dispatch: the snapped
+  // offsets and the pointer lane, edges attached to their frames
+  assert.deepEqual(got.map((r) => r.y), track.offsets.slice(10, 20));
+  assert.deepEqual(got[3].ptr.edges, [{ kind: 'down', x: 180, y: 130 }]);
+  assert.deepEqual(got[5].ptr.edges, [{ kind: 'up', x: 220, y: 170 }]);
+  assert.ok(!track.plan[1].includes('navigates'), 'no navigation marker when no click navigated');
+});
+
+test('a clickless recording is pure data — the gesture callback is never invoked', async () => {
+  const noClicks = { ...REC, buttons: undefined };
+  const cfg = cfgWith([{ type: 'start', at: 'top', hold: 1 }, noClicks]);
+  let called = 0;
+  await buildTrack(fakeSession(), cfg, {
+    performGesture: async () => { called++; return { navigations: 0 }; },
+  });
+  assert.equal(called, 0, 'pointer movement alone cannot navigate, so nothing to perform');
+});
+
+test('a recorded click that soft-navigates: later anchors resolve on the NEW view, plan says so', async () => {
+  // .destination only exists once the recorded click has routed there — which
+  // is exactly why the gesture must be replayed during the build.
+  let onNewPage = false;
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      if (a === 'top') return 0;
+      if (a.selector === '.destination') return onNewPage ? 1200 : undefined;
+      return undefined;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    REC,
+    { type: 'move', to: { selector: '.destination' }, duration: 1, ease: 'linear', hold: 0 },
+  ]);
+  const track = await buildTrack(session, cfg, {
+    performGesture: async () => { onNewPage = true; return { navigations: 1 }; },
+  });
+  assert.equal(track.offsets[track.offsets.length - 1], 1200, 'the move lands on the new-view anchor');
+  assert.match(track.plan[1], /replay recording .* → a click navigates \(client-side route\)/);
+});
+
 test('a recording that starts away from where the timeline stands earns a jump-cut warning', async () => {
   const away = {
     ...REC,

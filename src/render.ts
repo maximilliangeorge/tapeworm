@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { launch } from './browser.ts';
 import type { Connection, Session } from './cdp.ts';
 import { concatSegments, createEncoder, createPngWriter, type Encoder } from './encode.ts';
-import { openPage, prewarm, resetPage, settleNewDocument, waitForDocumentReady, waitForSoftNavigation } from './page.ts';
+import { openPage, prewarm, resetPage, settleNewDocument, sleep, waitForDocumentReady, waitForSoftNavigation } from './page.ts';
 import { strobeThreshold } from './easing.ts';
 import { buildTrack, peakStep, type Track } from './timeline.ts';
 import type { Resolved, Step } from './types.ts';
@@ -165,6 +165,87 @@ async function performAction(
 }
 
 /**
+ * Replay a recording's gesture during the plan phase — performAction's
+ * counterpart for record steps. The pointer path and button edges go through
+ * the real input pipeline, so state a recorded click creates (a menu opened, a
+ * view routed in) exists for the anchors that follow, and — the reason this
+ * runs at all — a click that navigates does it HERE, where there is time to
+ * deal with it. A client-side route change is waited in, settled and
+ * pre-warmed like a navigating click step's destination; a document load is
+ * refused, because the frames after it were recorded on a page that no longer
+ * exists and no capture pass could honour them.
+ *
+ * The replay is not paced to the recording's clock — only the page state it
+ * leaves behind matters, the capture pass owns the timing. Two beats are kept:
+ * one before each press, so open-on-hover UI the pointer path just triggered
+ * has real time to open before the click lands on it, and performAction's
+ * settle beat after each release for the handlers it fires.
+ */
+async function performRecordedGesture(
+  session: Session,
+  cfg: Resolved,
+  rec: Array<{ y: number; ptr: { x: number; y: number; down: boolean; edges?: Array<{ kind: 'down' | 'up'; x: number; y: number }> } }>,
+  note: (s: string) => void,
+): Promise<{ navigations: number }> {
+  let navigations = 0;
+  let lastY: number | null = null;
+  for (const { y, ptr } of rec) {
+    if (y !== lastY) {
+      await session.eval(`window.__sr.setScroll(${y})`);
+      lastY = y;
+    }
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.round(ptr.x),
+      y: Math.round(ptr.y),
+      button: 'none',
+      buttons: ptr.down ? 1 : 0,
+    });
+    for (const edge of ptr.edges ?? []) {
+      let wasAt = '';
+      if (edge.kind === 'down') {
+        await sleep(300); // hover-intent UI under the pointer gets to open first
+      } else {
+        await session.eval('window.__srNavProbe = true').catch(() => {});
+        wasAt = await session.eval<string>('location.href').catch(() => '');
+      }
+      await session.send('Input.dispatchMouseEvent', {
+        type: edge.kind === 'down' ? 'mousePressed' : 'mouseReleased',
+        x: Math.round(edge.x),
+        y: Math.round(edge.y),
+        button: 'left',
+        clickCount: 1,
+        buttons: edge.kind === 'down' ? 1 : 0,
+      });
+      if (edge.kind !== 'up') continue;
+      await sleep(150);
+      const sameDocument = await session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
+      const nowAt = sameDocument ? await session.eval<string>('location.href').catch(() => wasAt) : '';
+      if (!sameDocument) {
+        throw new Error(
+          'a recorded click loads a new document — the rest of the recording was captured on a page ' +
+            'that no longer exists, so it cannot replay across the load. Split the recording at that ' +
+            'click: a "click" step for the navigation, then a second recording on the destination. ' +
+            '(The extension does this automatically when a recorded click navigates.)',
+        );
+      }
+      if (nowAt !== wasAt) {
+        navigations++;
+        const waitedMs = await waitForSoftNavigation(session);
+        note(
+          `recorded click routed to ${nowAt} without a page load ` +
+            `(waited ${(waitedMs / 1000).toFixed(1)}s for the new view) — settling and pre-warming`,
+        );
+        for (const n of await settleNewDocument(session, cfg)) note(n);
+        for (const n of await prewarm(session, cfg)) note(n);
+        lastY = null; // the prewarm sweep moved the scroll — re-assert on the next frame
+      }
+    }
+  }
+  return { navigations };
+}
+
+/**
  * Move the virtual pointer far off the viewport. Chrome keeps the last pointer
  * position an interaction's mouseMoved left behind and re-computes :hover on
  * every scroll, so once the timeline scrolls on, whatever passes under that
@@ -199,10 +280,12 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   let track: Track;
   try {
     // Interactions are PERFORMED while the track is built — a click that
-    // navigates has to actually happen before the anchors on the far side of
-    // it can resolve. The page is reset before the capture pass below.
+    // navigates (authored, or inside a recording) has to actually happen
+    // before the anchors on the far side of it can resolve. The page is reset
+    // before the capture pass below.
     track = await buildTrack(lead.session, cfg, {
       perform: (step, y) => performAction(lead.session, cfg, step, y, note),
+      performGesture: (_step, rec) => performRecordedGesture(lead.session, cfg, rec, note),
     });
   } catch (e) {
     lead.conn.close();
@@ -342,9 +425,11 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
             const hasUp = ptr.edges?.some((e) => e.kind === 'up') ?? false;
             let wasAt = '';
             if (hasUp) {
-              // a recorded click may hit a link; navigation mid-recording is
-              // not replayable (the rest of the samples belong to the page
-              // that is now gone), so detect it and say what to do instead
+              // a recorded click may hit a link. A client-side route change is
+              // filmable — the document survives and the frames that follow
+              // were recorded on the destination view — but a document load is
+              // not (the rest of the samples belong to the page that is now
+              // gone), so detect which one happened
               await worker.session.eval('window.__srNavProbe = true').catch(() => {});
               wasAt = await worker.session.eval<string>('location.href').catch(() => '');
             }
@@ -373,12 +458,27 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
             if (hasUp) {
               const sameDocument = await worker.session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
               const nowAt = sameDocument ? await worker.session.eval<string>('location.href').catch(() => wasAt) : '';
-              if (!sameDocument || nowAt !== wasAt) {
+              if (!sameDocument) {
+                // normally caught while planning; reaching here means the page
+                // behaved differently under the capture pass's virtual clock
                 throw new Error(
-                  `a recorded click navigated (frame ${n}) — recorded clicks that navigate aren't replayable, ` +
-                    `because the rest of the recording belongs to the page that just left. ` +
-                    `Use a "click" step for the navigation, then record on the destination.`,
+                  `a recorded click loaded a new document (frame ${n}) — the rest of the recording belongs ` +
+                    `to the page that just left, so it cannot replay. Split the recording at that click: ` +
+                    `a "click" step for the navigation, then a second recording on the destination ` +
+                    `(the extension does this automatically).`,
                 );
+              }
+              if (nowAt !== wasAt) {
+                // A client-side route change: the router's transition is
+                // content, and the recorded frames that follow were captured on
+                // the destination view — which the plan phase settled and
+                // pre-warmed when it replayed this same click. Film straight
+                // through; the virtual clock drives the transition per frame,
+                // and the recorded scroll keeps imposing what the user's own
+                // browser did during it. No beginCapture re-arm: the
+                // transition's animations are mid-flight on their birth times,
+                // same as a soft-navigating click step.
+                note(`recorded click routed to ${nowAt} (frame ${n}) — filming the transition`);
               }
             }
             pointerAt = y;

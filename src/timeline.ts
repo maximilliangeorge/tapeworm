@@ -119,6 +119,21 @@ export type BuildOptions = {
     step: Step & { type: 'click' | 'hover' },
     y: number,
   ) => Promise<{ navigated: boolean; sameDocument?: boolean; waitedMs?: number }>;
+  /**
+   * Replay a record step's gesture while the track is built — the recording's
+   * counterpart of `perform`, and for the same reason: a recorded click can
+   * navigate, and the view on the far side has to actually arrive before the
+   * anchors beyond the recording can resolve there. The callback gets the
+   * recording resolved onto the frame grid (offset + pointer state per frame,
+   * edges attached) and reports how many clicks soft-navigated; a click that
+   * loads a new document is its place to refuse, while refusing is still
+   * cheap. Only called when the recording contains button edges — pointer
+   * movement alone can't navigate.
+   */
+  performGesture?: (
+    step: Step & { type: 'record' },
+    rec: Array<{ y: number; ptr: NonNullable<Track['pointer'][number]> }>,
+  ) => Promise<{ navigations: number }>;
 };
 
 export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOptions = {}): Promise<Track> {
@@ -204,18 +219,27 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
     }
 
     if (step.type === 'record') {
-      // The recording is data, not something to perform: resolve its samples
-      // onto the frame grid and let the capture pass dispatch the input. The
-      // build pass therefore doesn't touch the page here, so `interacted`
-      // stays as-is — anchors after this step resolve against the page as the
-      // plan walk left it, and any state a recorded click creates only exists
-      // during capture (which is also why recordings force jobs=1).
+      // The samples are data, not something to perform: resolve them onto the
+      // frame grid and let the capture pass dispatch the input. The one
+      // exception is the CLICKS a recording carries — one may navigate, and
+      // later anchors then live on the destination view, so a recording with
+      // button edges is replayed against the page now, exactly like click
+      // steps are performed. State a recorded click creates (a menu opened, a
+      // route mounted) then exists for the anchors that follow, as it will
+      // during capture (which stays jobs=1 — the frames are path-dependent).
       const { frames, edges } = resample(step, cfg.fps);
       const base = offsets.length;
       for (const f of frames) push(snap(f.scroll), { x: f.x, y: f.y, down: f.down });
       for (const e of edges) {
         const p = pointer[base + e.frame];
         if (p) (p.edges ??= []).push({ kind: e.kind, x: e.x, y: e.y });
+      }
+      let navigations = 0;
+      if (opts.performGesture && edges.length > 0) {
+        const rec = [];
+        for (let f = 0; f < frames.length; f++) rec.push({ y: offsets[base + f], ptr: pointer[base + f]! });
+        navigations = (await opts.performGesture(step, rec)).navigations;
+        interacted = true;
       }
       const startScroll = step.samples.s[0];
       const stoodAt = y;
@@ -227,6 +251,7 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
         `${startT.toFixed(2)}s  replay recording (${durationSec(step).toFixed(2)}s, ${step.samples.t.length} samples` +
           (clicks ? `, ${clicks} click${clicks === 1 ? '' : 's'}` : '') +
           `)` +
+          (navigations > 0 ? ` → ${navigations === 1 ? 'a click navigates' : `${navigations} clicks navigate`} (client-side route)` : '') +
           (hold > 0 ? `, hold ${hold.toFixed(2)}s` : ''),
       );
       if (Math.abs(startScroll - stoodAt) > 8) {

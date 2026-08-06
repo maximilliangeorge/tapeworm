@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { launch } from './browser.ts';
 import type { Session } from './cdp.ts';
-import { openPage, prewarm } from './page.ts';
+import { openPage, prewarm, settleNewDocument, waitForDocumentReady } from './page.ts';
 import type { Config, Resolved, Step } from './types.ts';
 
 type PickedEvent = {
@@ -37,6 +37,7 @@ export async function author(
 
   const conn = launch({ chromePath, headful: true });
   const steps: Step[] = [{ type: 'start', at: 'top', hold: 0.8 }];
+  let resumeRecording = false; // a navigation split a take — restart on the new document
 
   try {
     const { session, notes } = await openPage(conn, cfg);
@@ -66,6 +67,20 @@ export async function author(
         steps.push(step);
         note(`recorded ${(d.durationMs / 1000).toFixed(1)}s of interaction (${d.samples.t.length} samples)`);
       }
+      if (msg.type === 'record:split') {
+        // A recorded click loaded a new document. The overlay split the take
+        // at that click; land it as record → click, and let the load handler
+        // below resume the recording on the destination.
+        const d = msg.data;
+        if (d.take) {
+          const step: Step = { type: 'record', samples: d.take.samples, viewport: d.take.viewport };
+          if (d.take.buttons?.length) step.buttons = d.take.buttons;
+          steps.push(step);
+        }
+        steps.push({ type: 'click', target: d.click.anchor });
+        resumeRecording = true;
+        note('a recorded click navigated — split the take at the click; recording resumes on the destination');
+      }
       if (msg.type === 'record:cancelled') note('recording cancelled (nothing captured)');
       if (msg.type === 'page:info' && msg.data?.scrollGated) {
         note('this page gates scrolling behind an intro — scroll manually in the window to unlock it');
@@ -74,12 +89,43 @@ export async function author(
 
     // The shared core is already in the page (the runtime injects it); add the
     // overlay on top and wire its events to the binding.
-    await session.eval(readFileSync(OVERLAY_PATH, 'utf8'));
-    await session.eval(`
+    const overlaySrc = readFileSync(OVERLAY_PATH, 'utf8');
+    const bootOverlay = `
       TapewormOverlay.mount((type, data) => __twAuthor(JSON.stringify({ type, data })));
       TapewormOverlay.setSettings(${JSON.stringify({ width: cfg.width, height: cfg.height, dpr: cfg.dpr, fps: cfg.fps })});
-      TapewormOverlay.startPicker();
-    `);
+    `;
+    await session.eval(overlaySrc);
+    await session.eval(bootOverlay + 'TapewormOverlay.startPicker();');
+
+    // A navigation during authoring (a recorded click, or plain browsing)
+    // tears the overlay down with the document — put it back on the new one.
+    // A recording the navigation just split resumes immediately, before the
+    // user's pointer goes cold; otherwise the destination is settled and
+    // pre-warmed like a render would, and the picker returns.
+    let reattaching = false; // prewarm 'cache' reloads mid-reattach — don't recurse on its load event
+    session.on('Page.loadEventFired', () => {
+      if (reattaching) return;
+      reattaching = true;
+      void (async () => {
+        await waitForDocumentReady(session);
+        const resume = resumeRecording;
+        resumeRecording = false;
+        if (!resume) {
+          for (const n of await settleNewDocument(session, cfg)) note(n);
+          for (const n of await prewarm(session, cfg)) note(n);
+        }
+        await session.eval(overlaySrc);
+        await session.eval(bootOverlay);
+        if (resume) {
+          await session.eval('TapewormOverlay.startRecording()');
+          note('recording resumed on the destination — press ESC in the browser window to stop');
+        } else {
+          await session.eval('TapewormOverlay.startPicker()');
+        }
+      })()
+        .catch(() => { /* the window may have closed mid-flight */ })
+        .finally(() => { reattaching = false; });
+    });
 
     note('pick elements in the browser window. p = toggle picker, r = record until ESC, u = undo last, w = write config, q = quit');
 

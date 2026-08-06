@@ -48,6 +48,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'picker:picked') onPicked(d);
   if (msg.type === 'picker:stopped') setPicking(null);
   if (msg.type === 'record:done') onRecorded(d);
+  if (msg.type === 'record:split') onRecordSplit(d);
   if (msg.type === 'record:cancelled') setPicking(null);
   if (msg.type === 'preview:time') onPreviewTime(d);
   if (msg.type === 'preview:ended') { playing = false; $('play').textContent = '▶ Preview'; $('arm-record').disabled = false; }
@@ -98,6 +99,75 @@ function onRecorded(d) {
   setPicking(null);
   expandedIndex = state.steps.length - 1;
   commit();
+}
+
+/**
+ * A recorded click loaded a new document. The overlay split the take at that
+ * click (overlay.js onRecPageHide): everything before it arrives here as a
+ * finished take, the click itself as a picked target. Land both as steps —
+ * record, then click — and follow the navigation: re-inject on the
+ * destination and resume recording, so one continuous performance becomes
+ * record → click → record without re-arming anything. ESC (which disarms
+ * `picking` before this resumes) still ends the whole take.
+ */
+async function onRecordSplit(d) {
+  const start = state.steps[0];
+  if (start && start.type === 'start' && !start.url && currentPageUrl) start.url = currentPageUrl;
+  if (d.take) {
+    const step = { type: 'record', samples: d.take.samples, viewport: d.take.viewport };
+    if (d.take.buttons && d.take.buttons.length) step.buttons = d.take.buttons;
+    state.steps.push(step);
+  }
+  state.steps.push({ type: 'click', target: d.click.anchor, _quality: d.click.quality });
+  expandedIndex = state.steps.length - 1;
+  commit();
+
+  $('arm-record').textContent = '● following the navigation…';
+  await waitForTabComplete(20000);
+  if (picking !== 'record') return; // disarmed (ESC) while the page was loading
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+  } catch (e) {
+    setPicking(null);
+    $('inject-msg').textContent = 'The recording followed a navigation but couldn\'t re-attach: ' +
+      String((e && e.message) || e) + ' — likely a cross-origin page. The take so far is kept; ' +
+      'click the Tapeworm toolbar icon on the destination to keep authoring there.';
+    $('inject-note').hidden = false;
+    return;
+  }
+  setWarmed(false); // fresh document: reveals and lazy content are untriggered again
+  await syncPage();
+  if (picking !== 'record') return;
+  const r = await send('record:start');
+  if (!r || r.error) { setPicking(null); return; }
+  setPicking('record'); // restore the armed label over the "following…" text
+}
+
+/**
+ * Resolve when the tab reports 'complete' — checking the current status
+ * first, because a fast load may already be done by the time the split event
+ * crosses the extension. The timeout keeps an endless spinner from wedging
+ * the resume; injection is then attempted anyway, like returnToStart does.
+ */
+function waitForTabComplete(timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      clearTimeout(bail);
+      setTimeout(resolve, 150); // let the new document actually commit its scripts
+    };
+    const onUpdated = (id, changed) => {
+      if (id === tabId && changed.status === 'complete') finish();
+    };
+    const bail = setTimeout(finish, timeoutMs);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab && tab.status === 'complete') finish();
+    }).catch(finish);
+  });
 }
 
 function onPageInfo(d) {
@@ -647,6 +717,66 @@ $('add-hold').addEventListener('click', () => {
   commit();
 });
 
+/** Same document to load — a hash-only difference doesn't warrant a reload. */
+function samePage(a, b) {
+  try {
+    const ua = new URL(a); ua.hash = '';
+    const ub = new URL(b); ub.hash = '';
+    return ua.href === ub.href;
+  } catch (e) { return a === b; }
+}
+
+/**
+ * The render starts from the start step's pinned url, so the preview must too.
+ * Authoring can navigate the tab away (trying out a click that navigates, or
+ * plain browsing) — bring it back before playing. The navigation destroys the
+ * content scripts, so re-inject and resync after; returning to the authored
+ * page is a same-origin navigation, which the activeTab grant survives.
+ */
+async function returnToStart() {
+  const start = state.steps[0];
+  const startUrl = (start && start.type === 'start' && start.url) || '';
+  if (!startUrl) return true; // nothing pinned yet — play where we are
+  const info = await send('info');
+  const here = (info && info.url) || currentPageUrl;
+  if (here && samePage(here, startUrl)) return true;
+
+  $('play').disabled = true;
+  $('play').textContent = '⟳ Returning…';
+  try {
+    await new Promise((resolve) => {
+      const onUpdated = (id, changed) => {
+        if (id !== tabId || changed.status !== 'complete') return;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        clearTimeout(bail);
+        resolve();
+      };
+      // a page that never reaches 'complete' (endless spinner) must not wedge
+      // the Preview button — give up waiting and let the injection try anyway
+      const bail = setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }, 20000);
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      chrome.tabs.update(tabId, { url: startUrl }).catch(() => {});
+    });
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+    } catch (e) {
+      $('inject-msg').textContent = 'Couldn\'t re-attach after returning to ' + shortUrl(startUrl) +
+        ': ' + String((e && e.message) || e) + ' — click the Tapeworm toolbar icon to re-grant access, then Preview again.';
+      $('inject-note').hidden = false;
+      return false;
+    }
+    setWarmed(false); // fresh load: reveals and lazy content are untriggered again
+    await syncPage();
+    return true;
+  } finally {
+    $('play').disabled = state.steps.length < 2;
+    $('play').textContent = '▶ Preview';
+  }
+}
+
 $('play').addEventListener('click', async () => {
   if (picking === 'record') return; // the overlay refuses too — recording owns the page
   if (playing) {
@@ -656,6 +786,7 @@ $('play').addEventListener('click', async () => {
     await send('preview:stop');
     return;
   }
+  if (!(await returnToStart())) return;
   const r = await send('preview:play', { steps: state.steps.map(stripInternal) });
   if (r) { playing = true; $('play').textContent = '■ Stop'; $('arm-record').disabled = true; }
 });
@@ -797,7 +928,26 @@ async function attach() {
   }
 }
 
+/**
+ * The overlay stays in the page only while this port is open: bridge.js
+ * destroys it on disconnect, which is what cleans the page up when the panel
+ * closes (MV3 offers no panel-close event — the port dropping is the signal).
+ * Connecting again after the overlay was destroyed remounts it.
+ */
+let lifeline = null;
+function connectLifeline() {
+  if (tabId == null) return;
+  if (lifeline) { try { lifeline.disconnect(); } catch (e) {} }
+  try {
+    lifeline = chrome.tabs.connect(tabId, { name: 'tapeworm-lifeline' });
+    lifeline.onDisconnect.addListener(() => { lifeline = null; }); // page navigated or tab closed
+  } catch (e) {
+    lifeline = null;
+  }
+}
+
 async function syncPage() {
+  connectLifeline();
   await loadState();
   for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
     $(id).value = String(state.settings[key]);
