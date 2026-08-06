@@ -194,6 +194,69 @@ function resolveSubstitute(subs: Array<{ from: string; to: string }> | undefined
   });
 }
 
+const CURSOR_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.gif': 'image/gif',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+
+/** The built-in arrow sprite: tip at (5,3) inside a 22px box (see runtime.ts). */
+const BUILTIN_CURSOR = { image: null, tipX: 5, tipY: 3, size: 22 } as const;
+
+/**
+ * A replacement cursor image is embedded as a data: URI here, at config time —
+ * the page can't read local files, and a typo'd path should fail in seconds,
+ * not render an invisible cursor minutes in.
+ */
+function resolveCursor(
+  c: boolean | { image?: unknown; tip?: unknown; size?: unknown } | undefined,
+  pageUrl: string,
+): Resolved['page']['cursor'] {
+  if (c === false) return false;
+  if (c === undefined || c === true) return { ...BUILTIN_CURSOR };
+  if (typeof c !== 'object' || typeof c.image !== 'string' || c.image === '') {
+    throw new Error('"page.cursor" must be true, false, or { image: "path or url", tip?: [x, y], size?: px }');
+  }
+  const tip = c.tip ?? [0, 0];
+  if (
+    !Array.isArray(tip) || tip.length !== 2 ||
+    !tip.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)
+  ) {
+    throw new Error('page.cursor.tip must be [x, y] pixels >= 0 inside the rendered sprite');
+  }
+  const size = c.size ?? 32;
+  if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) {
+    throw new Error('page.cursor.size must be the rendered width in CSS px > 0');
+  }
+  let image = c.image;
+  if (/^https?:\/\//.test(image)) {
+    // Same downgrade rule as page.substitute: Chrome won't load http on an
+    // https page, which would surface as a cursor that silently never appears.
+    if (pageUrl.startsWith('https:') && image.startsWith('http:')) {
+      throw new Error(
+        `page.cursor.image: an https page can't load an http:// image (${image}) — ` +
+          `Chrome blocks the downgrade. Use an https URL, a data: URI, or a local file.`,
+      );
+    }
+  } else if (!image.startsWith('data:')) {
+    const path = resolvePath(image);
+    if (!existsSync(path)) throw new Error(`page.cursor.image: file not found: ${path}`);
+    if (statSync(path).isDirectory()) throw new Error(`page.cursor.image: is a directory: ${path}`);
+    const mime = CURSOR_MIME[extname(path).toLowerCase()];
+    if (!mime) {
+      throw new Error(
+        `page.cursor.image: can't tell the image type of ${path} — ` +
+          `use one of ${Object.keys(CURSOR_MIME).join(', ')}`,
+      );
+    }
+    image = `data:${mime};base64,${readFileSync(path).toString('base64')}`;
+  }
+  return { image, tipX: tip[0], tipY: tip[1], size };
+}
+
 export function resolveConfig(input: Config): Resolved {
   if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
     throw new Error('"timeline" must be an array');
@@ -295,7 +358,7 @@ export function resolveConfig(input: Config): Resolved {
       hideOverlays: input.page?.hideOverlays ?? true,
       clock: input.page?.clock ?? 'virtual',
       seekAnimations: input.page?.seekAnimations ?? true,
-      cursor: input.page?.cursor ?? true,
+      cursor: resolveCursor(input.page?.cursor, url),
       video: input.page?.video ?? 'sync',
       css: input.page?.css ?? '',
       script: input.page?.script ?? '',

@@ -219,6 +219,27 @@ test('__sr.cursor drives the same sprite by hand', () => {
   assert.match(appended[0].style.transform, /-9999px/);
 });
 
+test('a replacement cursor image is drawn instead of the built-in arrow, tip on the point', () => {
+  const { sr, appended } = bootWithCursorDom({
+    page: { cursor: { image: 'data:image/png;base64,AAAA', tip: [10, 4], size: 40 } },
+  });
+  sr.cursor(100, 50, false);
+  assert.equal(appended.length, 1);
+  const el = appended[0];
+  assert.match(el.innerHTML, /<img src="data:image\/png;base64,AAAA"/);
+  assert.match(el.innerHTML, /width:40px/);
+  assert.doesNotMatch(el.innerHTML, /<svg/);
+  assert.match(el.style.cssText, /transform-origin:10px 4px/, 'press scale pivots on the custom tip');
+  assert.match(el.style.transform, /translate\(90px,46px\)/, 'the custom tip sits on the point');
+});
+
+test('beginCapture pre-creates a replacement image cursor so it cannot pop in mid-gesture', () => {
+  const { sr, appended } = bootWithCursorDom({ page: { cursor: { image: 'data:image/png;base64,AAAA' } } });
+  sr.beginCapture(false);
+  assert.equal(appended.length, 1, 'created at capture start, before the first drawn frame');
+  assert.match(appended[0].style.cssText, /-9999px/, 'hidden until a gesture draws it');
+});
+
 test('page.cursor false: input still flows but nothing is ever drawn', async () => {
   const { sr, settle, appended } = bootWithCursorDom({ page: { cursor: false } });
   sr.beginCapture(false);

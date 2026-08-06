@@ -188,8 +188,15 @@ export type Config = {
      * Draw a cursor sprite during recorded-gesture replay, so the gesture is
      * visible in the video (screenshots never contain the real pointer).
      * Input is still dispatched when false. Default true.
+     *
+     * An object replaces the built-in arrow with your own sprite. `image` is
+     * a local image file (png/svg/gif/jpeg/webp, embedded into the render at
+     * config time), or an https:// or data: URL. `tip` is the [x, y] px
+     * inside the *rendered* sprite where the pointer tip sits — default
+     * [0, 0], the top-left corner. `size` is the rendered width in CSS px,
+     * height keeping the image's aspect — default 32.
      */
-    cursor?: boolean;
+    cursor?: boolean | { image: string; tip?: [number, number]; size?: number };
     video?: VideoMode;
     /** Extra CSS injected before the page's own scripts run. */
     css?: string;
@@ -270,7 +277,13 @@ export type Resolved = {
     hideOverlays: boolean;
     clock: 'virtual' | 'real';
     seekAnimations: boolean;
-    cursor: boolean;
+    /**
+     * false = never drawn. Otherwise the sprite to draw: the built-in arrow
+     * when `image` is null, else an image URL (local files became data: URIs
+     * at config time). tipX/tipY are the px inside the rendered sprite where
+     * the pointer tip sits; size is the rendered width in CSS px.
+     */
+    cursor: false | { image: string | null; tipX: number; tipY: number; size: number };
     video: VideoMode;
     css: string;
     script: string;

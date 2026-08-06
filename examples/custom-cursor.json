@@ -1,0 +1,43 @@
+{
+  // A recorded gesture rendered with a custom cursor sprite. The drawn cursor only
+  // appears during "record" replay — normally you capture the step with the
+  // extension's ● Record button (or `r` in `tapeworm author`); the short synthetic
+  // take below just keeps the example self-contained.
+  "url": "https://example.com",
+  "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "fps": 60,
+  "output": { "path": "custom-cursor.mp4" },
+
+  "timeline": [
+    { "at": "top", "hold": 1.0 },
+    {
+      "type": "record",
+      "samples": {
+        "t": [0, 250, 500, 750, 1000, 1250],
+        "x": [640, 655, 690, 730, 742, 742],
+        "y": [400, 380, 352, 330, 322, 322],
+        "s": [0, 0, 0, 0, 0, 0]
+      },
+      "buttons": [{ "t": 1050, "action": "down" }, { "t": 1150, "action": "up" }],
+      "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+      "hold": 1.2
+    }
+  ],
+
+  "page": {
+    // Replace the built-in arrow with your own image: a local file (png/svg/gif/
+    // jpeg/webp, embedded into the render at config time — a wrong path fails
+    // before Chrome launches), or an https:// or data: URL. For instance:
+    //   "cursor": { "image": "hand.png", "tip": [14, 2], "size": 40 }
+    //   "tip"  — [x, y] px inside the rendered sprite that lands on the recorded
+    //            point (default [0, 0], the top-left corner)
+    //   "size" — rendered width in CSS px, height keeps the aspect (default 32)
+    // `"cursor": false` hides the sprite entirely; the recorded input still runs.
+    // This one is a self-contained red dot, tip at its centre:
+    "cursor": {
+      "image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOSIgZmlsbD0iI2UzMyIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjMiLz48L3N2Zz4=",
+      "tip": [12, 12],
+      "size": 24
+    }
+  }
+}

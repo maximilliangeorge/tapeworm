@@ -329,20 +329,22 @@ function hideOverlays() {
 // (the selector generator refuses those), and a documentElement parent
 // (hideOverlays only scans body children, and discoverSections roots elsewhere).
 let cursorEl = null;
-const CURSOR_TIP_X = 5, CURSOR_TIP_Y = 3; // where the arrow tip sits inside the sprite
 
 function ensureCursor() {
   if (cursorEl) return cursorEl;
+  const cur = OPT.cursor; // false, or { image, tipX, tipY, size } — tip = where the pointer sits inside the sprite
   cursorEl = document.createElement('div');
   cursorEl.className = '__tw-cursor';
   cursorEl.style.cssText =
-    'position:fixed;left:0;top:0;width:22px;height:22px;z-index:2147483647;' +
+    'position:fixed;left:0;top:0;z-index:2147483647;' +
     'pointer-events:none;transform:translate(-9999px,-9999px);will-change:transform;' +
-    'transform-origin:' + CURSOR_TIP_X + 'px ' + CURSOR_TIP_Y + 'px;';
-  cursorEl.innerHTML =
-    '<svg width="22" height="22" viewBox="0 0 24 24">' +
-    '<path d="M5.5 3.2 L18.8 11.7 L12.4 12.9 L9.4 19.4 Z" ' +
-    'fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    'transform-origin:' + cur.tipX + 'px ' + cur.tipY + 'px;';
+  cursorEl.innerHTML = cur.image
+    ? '<img src="' + cur.image.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '" ' +
+      'style="display:block;width:' + cur.size + 'px;height:auto">'
+    : '<svg width="' + cur.size + '" height="' + cur.size + '" viewBox="0 0 24 24">' +
+      '<path d="M5.5 3.2 L18.8 11.7 L12.4 12.9 L9.4 19.4 Z" ' +
+      'fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
   document.documentElement.appendChild(cursorEl);
   return cursorEl;
 }
@@ -355,7 +357,7 @@ function drawCursor(c) {
     return;
   }
   ensureCursor().style.transform =
-    'translate(' + (c.x - CURSOR_TIP_X) + 'px,' + (c.y - CURSOR_TIP_Y) + 'px)' +
+    'translate(' + (c.x - OPT.cursor.tipX) + 'px,' + (c.y - OPT.cursor.tipY) + 'px)' +
     (c.down ? ' scale(0.88)' : '');
 }
 
@@ -441,6 +443,10 @@ window.__sr = {
     animBirth = new WeakMap();
     mode = 'stepped';
     vnow = 0;
+    // A replacement cursor image is created (hidden, off-screen) now rather
+    // than on its first drawn frame, so the fetch/decode happens before
+    // filming — the sprite must not pop in mid-gesture.
+    if (OPT.cursor && OPT.cursor.image) ensureCursor();
     if (!restartExisting && document.getAnimations) {
       try {
         for (const a of document.getAnimations()) {

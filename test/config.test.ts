@@ -167,7 +167,7 @@ const REC = {
 test('record steps are accepted and pass through verbatim', () => {
   const r = resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, REC] });
   assert.deepEqual(r.timeline[1], REC);
-  assert.equal(r.page.cursor, true, 'drawn cursor defaults on');
+  assert.deepEqual(r.page.cursor, { image: null, tipX: 5, tipY: 3, size: 22 }, 'drawn cursor defaults to the built-in arrow');
   assert.equal(resolveConfig({ url: BASE.url, page: { cursor: false }, timeline: [{ at: 'top' }, REC] }).page.cursor, false);
 });
 
@@ -259,6 +259,40 @@ test('page.substitute: validated and resolved; local files must exist at config 
     assert.deepEqual(r.page.substitute[0], { from: '*/hero.mp4', to: 'https://example.com/other.mp4' });
     assert.equal(r.page.substitute[1].to, file);
     assert.throws(() => sub([{ from: '*', to: dir }]), /replacement is a directory/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('page.cursor: a replacement image is validated and embedded at config time', () => {
+  const cur = (cursor: unknown) =>
+    resolveConfig({ ...BASE, page: { cursor } } as unknown as Config).page.cursor;
+
+  assert.throws(() => cur({}), /"page\.cursor" must be/);
+  assert.throws(() => cur({ image: '' }), /"page\.cursor" must be/);
+  assert.throws(() => cur({ image: './no-such-cursor.png' }), /file not found/);
+  assert.throws(() => cur({ image: 'https://example.com/c.png', tip: [5] }), /tip must be \[x, y\]/);
+  assert.throws(() => cur({ image: 'https://example.com/c.png', tip: [-1, 0] }), /tip must be \[x, y\]/);
+  assert.throws(() => cur({ image: 'https://example.com/c.png', size: 0 }), /size must be/);
+  assert.throws(() => cur({ image: 'http://example.com/c.png' }), /can't load an http:\/\/ image/);
+
+  // Remote and data: URLs pass through; tip and size default to top-left, 32px.
+  assert.deepEqual(cur({ image: 'https://example.com/c.png' }),
+    { image: 'https://example.com/c.png', tipX: 0, tipY: 0, size: 32 });
+  assert.deepEqual(cur({ image: 'data:image/png;base64,AAAA', tip: [4, 6], size: 48 }),
+    { image: 'data:image/png;base64,AAAA', tipX: 4, tipY: 6, size: 48 });
+
+  // A local file becomes a data: URI — a typo'd path fails here, not mid-render.
+  const dir = mkdtempSync(join(tmpdir(), 'tapeworm-test-'));
+  try {
+    const file = join(dir, 'hand.png');
+    writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const r = cur({ image: file });
+    assert.ok(r && r.image === `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')}`);
+    const odd = join(dir, 'hand.tiff');
+    writeFileSync(odd, 'x');
+    assert.throws(() => cur({ image: odd }), /can't tell the image type/);
+    assert.throws(() => cur({ image: dir }), /is a directory/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

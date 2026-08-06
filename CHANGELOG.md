@@ -9,6 +9,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Replaceable cursor sprite.** `page.cursor` now also accepts
+  `{ image, tip?, size? }` to draw your own sprite during recorded-gesture
+  replay instead of the built-in arrow — a local image file (embedded at
+  config time, so a wrong path fails before Chrome launches) or an
+  `https:`/`data:` URL, with `tip` naming the px inside the sprite that lands
+  on the recorded point (default top-left) and `size` the rendered width in
+  CSS px (default 32). `--cursor <image>` sets it from the CLI;
+  `--cursor none` hides the sprite. `true`/`false` behave as before.
+
 - **Record mode** — capture a stretch of real interaction as one timeline
   step. Arm **● Record** in the extension (or press `r` in `tapeworm author`),
   hover around, click, drag and scroll on the page, press **ESC**, and the

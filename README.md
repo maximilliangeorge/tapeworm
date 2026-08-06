@@ -127,6 +127,14 @@ That covers both kinds of navigation. A document load is spotted with a marker t
 
 `samples` are parallel arrays — one entry per captured frame: `t` ms from the recording's start, `x`/`y` the pointer in viewport CSS px, `s` the scroll offset. `buttons` are the left-button edges. During the render, the recorded scroll becomes the scroll track for those frames, and the pointer is driven per frame through Chrome's real input pipeline — `:hover` states, drags, and clicks all behave as they did live, and anything they animate is seeked by the same birth-time machinery as every other animation. A cursor sprite is drawn into the page so the gesture is visible on camera (`"page": { "cursor": false }` hides it; the input still happens). Like `click`/`hover`, a recording is path-dependent, so it forces sequential rendering (`jobs: 1`).
 
+The sprite is replaceable at render time — a branded pointer, a hand, a dot:
+
+```jsonc
+"page": { "cursor": { "image": "hand.png", "tip": [14, 2], "size": 40 } }
+```
+
+`image` is a local image file (png/svg/gif/jpeg/webp — embedded into the render at config time, so a typo'd path fails before Chrome launches), or an `https:`/`data:` URL. `tip` is the [x, y] px inside the rendered sprite where the pointer tip sits — the point that lands on what the recording pointed at (default `[0, 0]`, the top-left corner). `size` is the rendered width in CSS px, height keeping the image's aspect (default 32). The press feedback (a slight shrink around the tip while a button is down) applies to a replacement sprite too. From the CLI, `--cursor hand.png` does the same and `--cursor none` hides it.
+
 Three rules keep recordings honest:
 
 - **The viewport is part of the recording.** The step stamps the viewport it was captured at, and a render at any other size is refused — breakpoints make a different size a different page, and scaling coordinates would click the wrong things. Fit the window before recording (the extension pushes you to), or set the config's `viewport` to the recorded size.
@@ -298,6 +306,7 @@ tapeworm <config.json> | <url> | -     # - reads the config from stdin
     --sections <n>     how many sections --auto visits, default 6
     --video <mode>     sync | freeze | ignore
     --clock <mode>     virtual | real
+    --cursor <image>   replace the drawn gesture cursor; "none" hides it
     --prewarm <mode>   full | cache | none, default full
     --reveals          shorthand for --prewarm cache
     --image-budget <ms>  longest a frame waits for a loading image
