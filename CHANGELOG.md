@@ -120,6 +120,11 @@ and the project uses [Semantic Versioning](https://semver.org/).
   core invariant that the virtual clock follows the frame index, not the wall
   clock.
 
+### Changed
+
+- Extension: the **＋ Keyframe** button is now labelled **＋ Scroll to**, naming
+  what the picked step does rather than the timeline concept behind it.
+
 ### Fixed
 
 - Clicks that navigate via a **client-side router** are now recognised as

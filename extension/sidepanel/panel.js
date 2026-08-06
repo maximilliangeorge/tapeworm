@@ -573,7 +573,7 @@ async function refreshDuration() {
 function setPicking(mode) {
   picking = mode;
   $('pick').classList.toggle('active', mode === 'move');
-  $('pick').textContent = mode === 'move' ? '✕ Stop (Esc)' : '＋ Keyframe';
+  $('pick').textContent = mode === 'move' ? '✕ Stop (Esc)' : '＋ Scroll to';
   $('arm-click').classList.toggle('active', mode === 'click');
   $('arm-hover').classList.toggle('active', mode === 'hover');
   $('arm-record').classList.toggle('active', mode === 'record');

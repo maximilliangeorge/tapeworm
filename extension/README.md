@@ -40,7 +40,7 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
 3. **⟳ Warm up** (also in setup): steps through the whole page like the
    renderer's pre-warm, so lazy images load and scroll reveals fire before you
    pick.
-4. **＋ Keyframe**, then click things on the page. Each step shows its
+4. **＋ Scroll to**, then click things on the page. Each step shows its
    generated selector and a quality grade — `structural` is flagged as fragile.
    **⊕ Click** / **⊙ Hover** arm interaction mode instead: the next element you
    click is recorded as a click or hover step, performed with real trusted
