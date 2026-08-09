@@ -9,6 +9,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Export assets.** The extension's ⋯ menu can now download
+  `<hostname>.assets.json` — a record of every URL the current page has
+  fetched, sorted biggest first, with request counts and bytes where the
+  server allows measuring them. It's the reference list for writing
+  `page.substitute` rules. Collected passively via Resource Timing, so the
+  extension still needs no permissions beyond `activeTab`.
+
+- **iPad Pro viewport preset.** The extension's viewport preset list now
+  includes iPad Pro 1366×1024 (landscape).
+
 - **Replaceable cursor sprite.** `page.cursor` now also accepts
   `{ image, tip?, size? }` to draw your own sprite during recorded-gesture
   replay instead of the built-in arrow — a local image file (embedded at
@@ -139,6 +149,37 @@ and the project uses [Semantic Versioning](https://semver.org/).
   what the picked step does rather than the timeline concept behind it.
 
 ### Fixed
+
+- Extension: **Scroll-to steps on the far side of a navigation now preview.**
+  A move step whose anchor only exists on the page a preceding click
+  navigates to was silently dropped from the preview geometry — its selector
+  doesn't resolve on the page playback starts from — so the scroll never
+  played, while the render (which performs interactions while planning and
+  resolves later anchors on the destination) scrolled fine. Behind an
+  interaction, such a step now keeps a placeholder span and resolves the
+  moment playback reaches it: on the destination, starting from the live
+  scroll position, auto durations recomputed from the real distance, the
+  ruler re-stretching to match — and the anchor is retried while its span
+  plays, since the destination may still be mounting. Scrubbing can't
+  navigate, so on a seek the span plays as a hold at the current position.
+  With no interaction upstream, a missing anchor still reports as an error.
+
+- Extension: **the preview follows a navigating click step**. A click step
+  that loads a new document used to take the preview down with the page — the
+  destination appeared, but every later step (the second half of a split
+  take, say) never played. The panel now waits the load in, re-attaches the
+  overlay, and resumes playback where the click left off; the remainder of
+  the click's settle dwells at the destination's top, matching how the render
+  films a navigating click. Client-side route changes never needed this — the
+  document, and with it the preview, survives those.
+
+- Extension: **the preview replays recorded clicks**. A click inside a
+  `record` step now fires synthetically during playback — hit-tested at the
+  recorded pointer position, once as playback crosses its release, never on
+  scrub — so a recorded click that triggers a client-side route change routes
+  in the preview the way it will in the render. Previously recorded clicks
+  were skipped entirely, so everything after one previewed against the wrong
+  view. A down→up with real pointer travel is a drag and stays render-only.
 
 - Extension: **▶ Preview returns to the start URL first**. If authoring
   navigated the tab away from the page the timeline is pinned to (trying out

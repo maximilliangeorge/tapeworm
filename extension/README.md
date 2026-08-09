@@ -44,15 +44,25 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    generated selector and a quality grade — `structural` is flagged as fragile.
    **⊕ Click** / **⊙ Hover** arm interaction mode instead: the next element you
    click is recorded as a click or hover step, performed with real trusted
-   input during the render. In the preview, hovers are emulated (synthetic
-   mouse events plus cloned `:hover` CSS rules — close enough to judge timing
-   by; the render is the truth). Clicks are skipped in the preview — no
-   trusted input from a content script, and they'd mutate page state that
-   scrubbing couldn't undo — but their settle time still counts.
+   input during the render. In the preview, both are emulated with synthetic
+   (untrusted) events — hovers continuously, plus cloned `:hover` CSS rules;
+   clicks once as playback crosses them, never on scrub, and their effects
+   persist (a preview can't un-open a menu — reload to reset). Close enough
+   to judge timing by; the render is the truth. A click that loads a new
+   document is followed: the panel re-attaches on the destination and
+   playback resumes there, the rest of the click's settle dwelling at the
+   destination's top the way the render films it. Scroll-to steps whose
+   target only exists on the destination resolve when playback reaches them
+   (until then the ruler shows an estimated span; it adjusts to the real
+   distance as they resolve).
    **● Record** captures a stretch of real interaction until ESC, as one
-   `record` step. Clicking through a link mid-recording splits the take
-   automatically — `record` → `click` → `record` — and recording resumes on
-   the destination once it loads.
+   `record` step. The preview replays a take's scroll, traces the pointer
+   with a cursor dot, emulates hover under it, and fires its clicks the same
+   synthetic way — so a recorded click that routes client-side routes in the
+   preview too. Drags stay render-only. Clicking through a link to a **new
+   document** mid-recording splits the take automatically — `record` →
+   `click` → `record` — and recording resumes on the destination once it
+   loads.
 5. Steps collapse to one line — selector, quality, a drawn easing curve, and
    the seconds the step occupies. Drag the ⠿ grip to reorder (the start step
    stays pinned first). Click a row to open its editor
@@ -66,6 +76,14 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    clipboard, config embedded via a stdin heredoc (`tapeworm -`). Paste it into
    a terminal at the tapeworm repo; no exported file needed. Copy JSON and
    **Start over** live behind the ⋯ menu.
+8. **Export assets** (⋯ menu) downloads `<hostname>.assets.json` — a record of
+   every URL the current page has fetched (via Resource Timing, so no extra
+   permissions), biggest first, with request counts and bytes where the server
+   allows measuring them (`bytes: null` means cross-origin without
+   `Timing-Allow-Origin`). It's the reference list for writing
+   `page.substitute` rules in the config. Warm up first so lazy-loaded media
+   makes the list; the record is per-document (a reload starts it over) and
+   top-frame only — iframe embeds keep their own timelines.
 
 If the page is scroll-gated (the overlay will say so), scroll through the intro
 by hand once to unlock it, then author. The renderer unlocks it automatically at

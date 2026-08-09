@@ -197,6 +197,46 @@ function checkGate() {
   }
 }
 
+// ---------------------------------------------------------------- fetched assets
+/**
+ * A passive record of everything this document fetches — the list you consult
+ * when writing `page.substitute` rules for the renderer. Resource Timing, not
+ * chrome.webRequest: it needs no extra permissions (and this file stays
+ * chrome-free), and it sees cross-origin CDN requests that an activeTab-scoped
+ * listener never could. Starts at injection and never disconnects — closing
+ * the panel unmounts the overlay, but shouldn't wipe the record. Entries from
+ * before injection arrive via the buffered replay, capped by the page's own
+ * timing buffer; everything a Warm up triggers is caught live. Top frame only:
+ * iframes keep their own performance timelines.
+ */
+const fetchedAssets = new Map(); // url sans #fragment -> { type, bytes, requests }
+try {
+  new PerformanceObserver((entries) => {
+    for (const e of entries.getEntries()) {
+      const url = e.name.split('#')[0];
+      if (!/^https?:/.test(url)) continue; // data:, blob:, extension internals
+      let a = fetchedAssets.get(url);
+      if (!a) { a = { type: e.initiatorType, bytes: 0, requests: 0 }; fetchedAssets.set(url, a); }
+      a.requests++; // a <video> seeking issues many Range requests for one URL
+      // transferSize is 0 for cache hits (encodedBodySize still real) and for
+      // cross-origin responses without Timing-Allow-Origin (both 0 — unknowable).
+      a.bytes += e.transferSize || e.encodedBodySize || 0;
+    }
+  }).observe({ type: 'resource', buffered: true });
+} catch (e) { /* no Resource Timing — the export is just empty */ }
+
+function assets() {
+  const list = Array.from(fetchedAssets, ([url, a]) => ({
+    url,
+    type: a.type,
+    bytes: a.bytes > 0 ? a.bytes : null, // null: cross-origin without Timing-Allow-Origin
+    requests: a.requests,
+  }));
+  // Biggest first — the asset worth substituting is almost always near the top.
+  list.sort((x, y) => (y.bytes || 0) - (x.bytes || 0));
+  return { url: location.href, assets: list };
+}
+
 function onScrollOrGate() { checkGate(); }
 
 // ---------------------------------------------------------------- picker
@@ -592,16 +632,25 @@ function setPreviewHoverEl(el, x, y) {
   }
 }
 
-/** Synthetic click on the step's target — down, up, click, at its centre. */
-function firePreviewClick(target) {
+/**
+ * Synthetic click — down, up, click. A click step carries its target anchor
+ * and is hit at the element's centre; a recorded click carries only the
+ * pointer position and is hit-tested there.
+ */
+function firePreviewClick(c) {
   let el = null;
-  try { el = document.querySelectorAll(target.selector)[target.nth || 0] || null; } catch (e) {}
+  const at = c.target ? {} : { x: c.x, y: c.y };
+  if (c.target) {
+    try { el = document.querySelectorAll(c.target.selector)[c.target.nth || 0] || null; } catch (e) {}
+  } else {
+    el = hitTest(c.x, c.y);
+  }
   if (!el) return;
-  fireMouse(el, 'pointerdown');
-  fireMouse(el, 'mousedown');
-  fireMouse(el, 'pointerup');
-  fireMouse(el, 'mouseup');
-  fireMouse(el, 'click');
+  fireMouse(el, 'pointerdown', at);
+  fireMouse(el, 'mousedown', at);
+  fireMouse(el, 'pointerup', at);
+  fireMouse(el, 'mouseup', at);
+  fireMouse(el, 'click', at);
 }
 
 /** What should be hovered at time t: the last hover before t, ended by any later interaction. */
@@ -667,10 +716,11 @@ function applyPreviewHover(geo, t) {
 function buildGeometry(steps) {
   const segs = [];   // { t0, t1, from, to, easeFn, idx } — holds are from===to; idx = source step
   const pointerEvents = []; // { t, anchor|null } — hover starts / hover-ending interactions
-  const clicks = []; // { t, target } — fired once as playback crosses them
+  const clicks = []; // { t, target } (click steps) or { t, x, y } (recorded) — fired once as playback crosses them
   let t = 0;
   let y = 0;
   const errors = [];
+  let sawInteraction = false; // a click (step or recorded) upstream may navigate before later anchors are needed
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
@@ -686,14 +736,30 @@ function buildGeometry(steps) {
       t += step.seconds;
     } else if (step.type === 'move') {
       const target = safeResolve(step.to);
-      if (target == null) { errors.push({ index: i, anchor: step.to }); continue; }
-      const easeFn = E.resolveEase(step.ease, Math.abs(target - y) / settings.height);
-      const duration = step.duration != null
-        ? step.duration
-        : E.autoDuration(target - y, settings.height, easeFn);
-      segs.push({ t0: t, t1: t + duration, from: y, to: target, easeFn, idx: i });
+      if (target == null && !sawInteraction) { errors.push({ index: i, anchor: step.to }); continue; }
+      let duration;
+      if (target == null) {
+        // Unresolvable HERE — but an earlier click may navigate before
+        // playback arrives, and the render's rule is that anchors after an
+        // interaction resolve wherever the timeline stands by then. So the
+        // step keeps a placeholder span (a viewport-height move's worth when
+        // the duration is auto) instead of being dropped; playback resolves
+        // it on arrival and re-stretches the timeline to the real distance
+        // (resolveDeferred). A scrubbed seek can't navigate, so there the
+        // span plays as a hold at the current position.
+        duration = step.duration != null
+          ? step.duration
+          : E.autoDuration(settings.height, settings.height, E.resolveEase(step.ease, 1));
+        segs.push({ t0: t, t1: t + duration, from: y, to: null, easeFn: null, idx: i, defer: step });
+      } else {
+        const easeFn = E.resolveEase(step.ease, Math.abs(target - y) / settings.height);
+        duration = step.duration != null
+          ? step.duration
+          : E.autoDuration(target - y, settings.height, easeFn);
+        segs.push({ t0: t, t1: t + duration, from: y, to: target, easeFn, idx: i });
+        y = target;
+      }
       t += duration;
-      y = target;
       const isLast = i === steps.length - 1;
       const hold = step.hold != null ? step.hold : (isLast ? 0.8 : 0.6);
       if (hold > 0) { segs.push({ t0: t, t1: t + hold, from: y, to: y, easeFn: null, idx: i }); t += hold; }
@@ -701,11 +767,26 @@ function buildGeometry(steps) {
       // The recorded scroll replays, a cursor dot traces the pointer, and the
       // point under it is hover-emulated per tick (hit-tested live — see
       // applyPreviewHover), all via the same gesture core the renderer
-      // resolves with. Clicks/drags stay render-only: their effects persist
-      // on the page, which a scrubbing preview can't afford. The null pointer
-      // event ends any earlier hover step's hover, and stands after the
-      // recording too — the render parks the pointer there.
+      // resolves with. A recorded down→up that barely travels is a click —
+      // emulated in playback exactly like a click step, but hit-tested at the
+      // recorded pointer position (a recording captures where, not what), so
+      // a click that routes client-side routes in the preview too. Travel
+      // between the edges is a drag, which stays render-only: no synthetic
+      // sequence reproduces one. The null pointer event ends any earlier
+      // hover step's hover, and stands after the recording too — the render
+      // parks the pointer there.
       pointerEvents.push({ t, anchor: null });
+      const edges = step.buttons || [];
+      if (edges.length) sawInteraction = true;
+      for (let b = 0; b + 1 < edges.length; b++) {
+        if (edges[b].action !== 'down' || edges[b + 1].action !== 'up') continue;
+        const down = G.pointerAt(step, edges[b].t / 1000);
+        const up = G.pointerAt(step, edges[b + 1].t / 1000);
+        if (Math.hypot(up.x - down.x, up.y - down.y) > 8) continue;
+        // fires at the up edge (a click completes on release), aimed where
+        // the press landed — real clicks target the mousedown element
+        clicks.push({ t: t + edges[b + 1].t / 1000, x: down.x, y: down.y });
+      }
       const dur = G.durationSec(step);
       segs.push({ t0: t, t1: t + dur, from: y, to: null, easeFn: null, idx: i, rec: step });
       t += dur;
@@ -719,7 +800,7 @@ function buildGeometry(steps) {
       // un-open a menu); reloading the page is the reset. Settle time passes
       // either way so timestamps agree with the render.
       pointerEvents.push({ t, anchor: step.type === 'hover' ? step.target : null });
-      if (step.type === 'click') clicks.push({ t, target: step.target });
+      if (step.type === 'click') { clicks.push({ t, target: step.target }); sawInteraction = true; }
       const settle = step.settle != null ? step.settle : 0.6;
       segs.push({ t0: t, t1: t + settle, from: y, to: y, easeFn: null, idx: i });
       t += settle;
@@ -735,12 +816,60 @@ function offsetAt(geo, tSec) {
     if (t <= s.t1 || s === geo.segments[geo.segments.length - 1]) {
       if (t < s.t0) return s.from;
       if (s.rec) return G.pointerAt(s.rec, t - s.t0).scroll;
-      if (!s.easeFn || s.t1 === s.t0) return s.to;
+      // a still-deferred move (unresolved anchor) holds the current position
+      if (!s.easeFn || s.t1 === s.t0) return s.to == null ? s.from : s.to;
       const u = (t - s.t0) / (s.t1 - s.t0);
       return s.from + (s.to - s.from) * s.easeFn(Math.min(1, u));
     }
   }
   return 0;
+}
+
+/**
+ * Give deferred move segments their real geometry the moment playback reaches
+ * them — by then the interaction upstream has navigated and the destination
+ * is the page in hand, which is exactly when the render resolves them too.
+ * The move starts from the LIVE scroll (wherever the navigation left the
+ * page), an auto duration is recomputed from the real distance, and every
+ * later segment shifts by the difference — the next preview:time carries the
+ * corrected total, so the panel's ruler follows. Positions chained off the
+ * stale pre-navigation offset are re-chained from the resolved target, up to
+ * the next segment that owns its own values (a recording, or another
+ * deferred move). An anchor that still doesn't resolve is retried every tick
+ * while its span plays — the destination may still be mounting, the same
+ * patience the render's post-interaction anchor wait shows — and if it never
+ * does, the span plays out as a hold.
+ */
+function resolveDeferred(geo, t) {
+  for (let k = 0; k < geo.segments.length; k++) {
+    const s = geo.segments[k];
+    if (!s.defer || t < s.t0) continue;
+    const target = safeResolve(s.defer.to);
+    if (target == null) continue; // retry next tick while the span plays
+    const from = window.scrollY;
+    const easeFn = E.resolveEase(s.defer.ease, Math.abs(target - from) / settings.height);
+    const dur = s.defer.duration != null
+      ? s.defer.duration
+      : E.autoDuration(target - from, settings.height, easeFn);
+    const delta = s.t0 + dur - s.t1;
+    s.from = from;
+    s.to = target;
+    s.easeFn = easeFn;
+    s.t1 = s.t0 + dur;
+    s.defer = null;
+    let yNow = target;
+    let chain = true;
+    for (let m = k + 1; m < geo.segments.length; m++) {
+      const g = geo.segments[m];
+      g.t0 += delta;
+      g.t1 += delta;
+      if (!chain) continue;
+      if (g.rec || g.defer) { chain = false; continue; }
+      if (g.from === g.to) { g.from = g.to = yNow; }
+      else { g.from = yNow; yNow = g.to; }
+    }
+    geo.total += delta;
+  }
 }
 
 /** Trace the recorded pointer with the dot while t is inside a record segment. */
@@ -760,21 +889,42 @@ function updatePreviewCursor(geo, tSec) {
   els.previewCursor.style.display = 'none';
 }
 
-function play(steps) {
+/**
+ * Play the timeline, optionally resuming at `fromSec` — how the panel picks a
+ * preview back up on the destination after a click step loaded a new
+ * document. On a resume, clicks at or before the offset are marked already
+ * fired (the navigating one included — re-firing it would navigate again),
+ * and any non-record segment already in progress plays out at scroll 0: the
+ * fresh document sits at its top, and the render, too, films a navigating
+ * click's settle at the destination's top. A record segment is resumed at its
+ * own values instead — they were recorded on this very destination.
+ */
+function play(steps, fromSec) {
   if (recording) return null; // the shield would swallow the input being recorded
   stopPreview(true);
   const geo = buildGeometry(steps);
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
-  preview = { geo, startWall: performance.now(), offsetSec: 0, playing: true, raf: 0, fired: new Set() };
+  const from = fromSec > 0 ? Math.min(fromSec, geo.total) : 0;
+  const fired = new Set();
+  let holdZeroUntil = 0;
+  if (from > 0) {
+    geo.clicks.forEach((c, i) => { if (c.t <= from) fired.add(i); });
+    for (const s of geo.segments) {
+      // a deferred move resumes by resolving on the destination instead
+      if (!s.rec && !s.defer && from > s.t0 && from <= s.t1) { holdZeroUntil = s.t1; break; }
+    }
+  }
+  preview = { geo, startWall: performance.now(), offsetSec: from, playing: true, raf: 0, fired };
   if (els.shield) els.shield.style.display = 'block';
   const tick = () => {
     if (!preview || !preview.playing) return;
     const t = preview.offsetSec + (performance.now() - preview.startWall) / 1000;
-    A.setScroll(offsetAt(preview.geo, t));
+    resolveDeferred(preview.geo, t);
+    A.setScroll(t < holdZeroUntil ? 0 : offsetAt(preview.geo, t));
     // clicks fire once as playback crosses them — never on scrub, where a
     // back-and-forth would toggle menus open and shut
     preview.geo.clicks.forEach((c, i) => {
-      if (c.t <= t && !preview.fired.has(i)) { preview.fired.add(i); firePreviewClick(c.target); }
+      if (c.t <= t && !preview.fired.has(i)) { preview.fired.add(i); firePreviewClick(c); }
     });
     applyPreviewHover(preview.geo, t);
     updatePreviewCursor(preview.geo, t);
@@ -853,7 +1003,9 @@ function duration(steps) {
   const geo = buildGeometry(steps);
   // One span per contributing step: its full slice of the timeline, implicit
   // holds included — what the panel's duration ruler draws. A move step "owns"
-  // its trailing hold; steps whose anchor failed to resolve produce no span.
+  // its trailing hold. A move whose anchor failed to resolve produces no span
+  // — unless an interaction precedes it, where it keeps its placeholder span
+  // (the anchor may live on the page the interaction navigates to).
   const byStep = new Map();
   for (const s of geo.segments) {
     const got = byStep.get(s.idx);
@@ -878,5 +1030,6 @@ globalThis.TapewormOverlay = {
   jump,
   duration,
   prepare,
+  assets,
 };
 })();

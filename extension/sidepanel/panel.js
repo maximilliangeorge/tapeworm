@@ -24,6 +24,7 @@ let state = {
 };
 let totalSec = 0;
 let playing = false;
+let lastPreviewT = 0;   // where playback last reported being — the resume point after a mid-preview navigation
 let picking = null; // null | 'move' | 'click' | 'hover' | 'record'
 let currentPageUrl = ''; // where the tab is NOW — the timeline's url is pinned on the start step
 let lastInfo = null;     // most recent page:info payload
@@ -234,6 +235,7 @@ async function fitWindow() {
 
 function onPreviewTime(d) {
   totalSec = d.total;
+  lastPreviewT = d.t;
   setPlayhead(d.t, d.total);
 }
 
@@ -501,7 +503,7 @@ function renderSteps() {
     } else if (step.type === 'record') {
       ed.append(field('hold s', numInput(step.hold, '0', (v) => { step.hold = v == null ? undefined : v; commit(); })));
       const t = tools(i);
-      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview emulates the hover — clicks/drags render-only'));
+      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview emulates the hover and clicks (effects persist — reload to reset) — drags render-only'));
       ed.append(t);
     } else {
       ed.append(tools(i));
@@ -787,8 +789,50 @@ $('play').addEventListener('click', async () => {
     return;
   }
   if (!(await returnToStart())) return;
+  lastPreviewT = 0;
   const r = await send('preview:play', { steps: state.steps.map(stripInternal) });
   if (r) { playing = true; $('play').textContent = '■ Stop'; $('arm-record').disabled = true; }
+});
+
+/**
+ * A click step that loads a NEW document mid-preview takes the content
+ * scripts — and the playback — down with the page, leaving every step
+ * recorded on the destination unplayed. So the panel does for the preview
+ * what onRecordSplit does for recording: when the tab starts loading a
+ * document while a preview plays, wait the load in, re-inject, and resume
+ * playback where it left off (the overlay dwells at the destination's top
+ * through the rest of the click's settle, matching how the render films a
+ * navigating click). Client-side route changes never arrive here — the
+ * document, and with it the preview, survives those.
+ */
+let followingNav = false;
+chrome.tabs.onUpdated.addListener((id, changed) => {
+  if (id !== tabId || changed.status !== 'loading' || !playing || followingNav) return;
+  followingNav = true;
+  void (async () => {
+    const resumeT = lastPreviewT;
+    $('play').textContent = '⟳ Following…';
+    await waitForTabComplete(20000);
+    if (!playing) return; // stopped while the destination loaded
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+    } catch (e) {
+      playing = false;
+      $('play').textContent = '▶ Preview';
+      $('arm-record').disabled = false;
+      $('inject-msg').textContent = 'The preview followed a navigation but couldn\'t re-attach: ' +
+        String((e && e.message) || e) + ' — likely a cross-origin page. Click the Tapeworm toolbar ' +
+        'icon on the destination to re-grant access, then Preview again.';
+      $('inject-note').hidden = false;
+      return;
+    }
+    setWarmed(false); // fresh document: reveals and lazy content are untriggered again
+    await syncPage();
+    if (!playing) return;
+    const r = await send('preview:play', { steps: state.steps.map(stripInternal), from: resumeT });
+    if (r) $('play').textContent = '■ Stop';
+    else { playing = false; $('play').textContent = '▶ Preview'; $('arm-record').disabled = false; }
+  })().finally(() => { followingNav = false; });
 });
 
 for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
@@ -826,14 +870,32 @@ function exportBasename(url) {
   try { return new URL(url).hostname || 'tapeworm'; } catch { return 'tapeworm'; }
 }
 
-$('export').addEventListener('click', async () => {
-  const cfg = await buildConfig();
-  const blob = new Blob([JSON.stringify(cfg, null, 2) + '\n'], { type: 'application/json' });
+function downloadJson(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2) + '\n'], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = exportBasename(cfg.url) + '.json';
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+$('export').addEventListener('click', async () => {
+  const cfg = await buildConfig();
+  downloadJson(cfg, exportBasename(cfg.url) + '.json');
+});
+
+// The asset record: everything the CURRENT document has fetched (the overlay's
+// Resource Timing collector), for writing page.substitute rules against. Not
+// part of the config export — substitution rules live in the config by hand;
+// this is the reference list you write them from.
+$('export-assets').addEventListener('click', async () => {
+  $('more').open = false;
+  const r = await send('assets');
+  if (!r) return; // page navigated / not injected — surfaced via inject-note
+  downloadJson(
+    { url: r.url, recordedAt: new Date().toISOString(), assets: r.assets },
+    exportBasename(r.url) + '.assets.json',
+  );
 });
 
 // The --out extension is what selects the codec CLI-side (.png = a frame

@@ -1,8 +1,4 @@
 node_modules/
-*.mp4
-*.mov
-*.png
 !extension/icons/*.png
 *.pem
-*.jpg
-test.json
+sandbox/*

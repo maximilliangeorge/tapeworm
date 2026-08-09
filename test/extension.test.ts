@@ -544,6 +544,170 @@ test('recorded hover raises the events a real pointer would: pointer + mouse, ch
   );
 });
 
+test('preview fires a recorded click at the recorded spot — once, in playback only; drags stay render-only', () => {
+  const fired: string[] = [];
+  const btn: any = {
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 150, top: 30, width: 100, height: 40 }),
+    dispatchEvent: (e: any) => fired.push(e.type + '@' + Math.round(e.clientX)),
+  };
+  const w = bootOverlay();
+  w.document.elementFromPoint = (x: number) => (x >= 150 ? btn : null);
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+
+  // 2s recording, pointer parked at x=200 for the second half; a stationary
+  // down→up at t=1.4/1.45 — a click, released over the button
+  const rec = {
+    type: 'record',
+    samples: { t: [0, 1000, 2000], x: [100, 200, 200], y: [50, 50, 50], s: [0, 0, 0] },
+    viewport: { width: 1000, height: 700, dpr: 2 },
+    buttons: [{ t: 1400, action: 'down' }, { t: 1450, action: 'up' }],
+  };
+  const steps = [{ type: 'start', at: 'top', hold: 1 }, rec];
+
+  // scrubbing across the click must NOT fire it — back-and-forth would toggle state
+  O.seek(steps, 2.6);
+  assert.ok(!fired.some((f) => f.startsWith('click')), 'no click on scrub: ' + fired);
+
+  w.__setNow(0);
+  O.play(steps);
+  w.__pumpRaf();
+  w.__setNow(2000); w.__pumpRaf(); // t=2.0 — before the release
+  assert.ok(!fired.some((f) => f.startsWith('click')), 'not before playback crosses the release');
+  w.__setNow(2500); w.__pumpRaf(); // t=2.5 — crossed it
+  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    assert.equal(fired.filter((f) => f === type + '@200').length, 1, `${type} at the press position: ` + fired);
+  }
+  w.__setNow(2700); w.__pumpRaf();
+  assert.equal(fired.filter((f) => f.startsWith('click')).length, 1, 'fired exactly once');
+  O.stopPreview();
+
+  // a down→up with real pointer travel is a drag — no synthetic sequence reproduces one
+  fired.length = 0;
+  const drag = {
+    ...rec,
+    samples: { t: [0, 1000, 2000], x: [100, 300, 300], y: [50, 50, 50], s: [0, 0, 0] },
+    buttons: [{ t: 100, action: 'down' }, { t: 900, action: 'up' }], // x 120 → 280
+  };
+  w.__setNow(0);
+  O.play([{ type: 'start', at: 'top', hold: 1 }, drag]);
+  w.__setNow(2900); w.__pumpRaf();
+  assert.ok(!fired.some((f) => f.startsWith('click')), 'drags are render-only: ' + fired);
+  O.stopPreview();
+});
+
+test('preview resume after a navigation: earlier clicks stay fired, the interrupted settle dwells at the top', () => {
+  const mkCta = (fired: string[]): any => ({
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 100, top: 100, width: 80, height: 30 }),
+    dispatchEvent: (e: any) => fired.push(e.type),
+  });
+  // start at the bottom (y=4000) → click at t=1, settle to t=2 → 2s recording
+  // whose scroll was captured on the DESTINATION (0 → 200)
+  const steps = (cta: any) => [
+    { type: 'start', at: 'bottom', hold: 1 },
+    { type: 'click', target: { selector: '.cta' }, settle: 1 },
+    {
+      type: 'record',
+      samples: { t: [0, 1000, 2000], x: [100, 200, 300], y: [50, 50, 50], s: [0, 100, 200] },
+      viewport: { width: 1000, height: 700, dpr: 2 },
+    },
+  ];
+
+  // sanity: a plain play crosses the click and fires it
+  {
+    const fired: string[] = [];
+    const cta = mkCta(fired);
+    const w = bootOverlay({ queries: { '.cta': [cta] } });
+    const O = w.TapewormOverlay;
+    O.mount(() => {});
+    O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+    w.__setNow(0);
+    O.play(steps(cta));
+    w.__setNow(1100); w.__pumpRaf();
+    assert.equal(fired.filter((f) => f === 'click').length, 1, 'plain play fires the click');
+    O.stopPreview();
+  }
+
+  // resume at t=1.3 — mid-settle, on the "destination" document
+  {
+    const fired: string[] = [];
+    const cta = mkCta(fired);
+    const w = bootOverlay({ queries: { '.cta': [cta] } });
+    const O = w.TapewormOverlay;
+    O.mount(() => {});
+    O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+    w.__setNow(0);
+    const r = O.play(steps(cta), 1.3);
+    assert.ok(r && Math.abs(r.total - 4) < 1e-9, 'resume returns the full total');
+    w.__pumpRaf(); // t=1.3
+    assert.equal(fired.filter((f) => f === 'click').length, 0, 'the click that navigated is not re-fired');
+    assert.equal(w.scrollY, 0, 'the interrupted settle dwells at the destination\'s top, not the old page\'s offset');
+    w.__setNow(400); w.__pumpRaf(); // t=1.7 — still in the settle
+    assert.equal(w.scrollY, 0);
+    w.__setNow(900); w.__pumpRaf(); // t=2.2 — 0.2s into the recording
+    assert.ok(Math.abs(w.scrollY - 20) < 1e-9, 'the recording resumes at its own (destination-recorded) scroll: ' + w.scrollY);
+    O.stopPreview();
+  }
+});
+
+test('a Scroll-to on the far side of a navigation resolves when playback reaches it', () => {
+  const cta: any = {
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 100, top: 100, width: 80, height: 30 }),
+    dispatchEvent: () => {},
+  };
+  const dest: any = {
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 0, top: 1000, width: 800, height: 400 }),
+  };
+  const queries: Record<string, unknown[]> = { '.cta': [cta] }; // .dest doesn't exist yet
+  const w = bootOverlay({ queries });
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+
+  // without an interaction upstream, a missing anchor is still just a bad selector
+  const bad = O.duration([{ type: 'start', at: 'top', hold: 0.5 }, { type: 'move', to: { selector: '.dest' } }]);
+  assert.equal(bad.errors.length, 1, 'no interaction — the miss is an error');
+
+  // behind a click, the move keeps a placeholder span instead of being dropped
+  const steps = [
+    { type: 'start', at: 'top', hold: 0.5 },
+    { type: 'click', target: { selector: '.cta' }, settle: 0.5 },
+    { type: 'move', to: { selector: '.dest' }, duration: 1, hold: 0 },
+  ];
+  const d = O.duration(steps);
+  assert.equal(d.errors.length, 0, 'behind an interaction the miss defers instead of erroring');
+  assert.ok(d.spans.some((sp: any) => sp.index === 2), 'the deferred move owns a span on the ruler');
+  assert.ok(Math.abs(d.total - 2) < 1e-9, 'placeholder span counts toward the total: ' + d.total);
+
+  w.__setNow(0);
+  O.play(steps);
+  w.__setNow(700); w.__pumpRaf(); // t=0.7 — the click fired; "navigation" mounts .dest
+  queries['.dest'] = [dest];
+  w.__setNow(1600); w.__pumpRaf(); // t=1.6 — mid-move, resolved live on the destination
+  assert.ok(w.scrollY > 0 && w.scrollY < 1000, 'the deferred move is scrolling: ' + w.scrollY);
+  w.__setNow(2100); w.__pumpRaf(); // past the end — clamped to the move's target
+  assert.ok(Math.abs(w.scrollY - 1000) < 1e-9, 'lands on the late-resolved anchor: ' + w.scrollY);
+  O.stopPreview();
+
+  // scrubbing can't navigate: the unresolved span seeks as a hold, not an error
+  delete queries['.dest'];
+  O.seek(steps, 1.6);
+  assert.equal(w.scrollY, 0, 'seek holds the current position through an unresolved span');
+});
+
 test('overlay reports whether the window IS the render viewport — never a scaled stand-in', () => {
   const w = bootOverlay(); // window is 1000×700
   const O = w.TapewormOverlay;

@@ -49,11 +49,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'picker:stop': O.stopPicker(); break;
     case 'record:start': result = O.startRecording(); break;
     case 'record:stop': O.stopRecording(); break;
-    case 'preview:play': result = O.play(d.steps); break;
+    case 'preview:play': result = O.play(d.steps, d.from); break;
     case 'preview:seek': result = O.seek(d.steps, d.t); break;
     case 'preview:stop': O.stopPreview(); break;
     case 'jump': result = O.jump(d.anchor); break;
     case 'duration': result = O.duration(d.steps); break;
+    case 'assets': result = O.assets(); break;
   }
   sendResponse(result);
   return false;
