@@ -1,7 +1,10 @@
 /**
  * The side-panel editor. Owns the timeline being authored; the content-script
- * overlay owns the page. All state lives here + chrome.storage.session (MV3
- * service workers get evicted, so nothing may live in the background worker).
+ * overlay owns the page. Working state lives here + chrome.storage.session
+ * (MV3 service workers get evicted, so nothing may live in the background
+ * worker); the saves library and the per-site autosave live in
+ * chrome.storage.local, which survives browser restarts and extension
+ * updates.
  *
  * Structure mirrors the authoring sequence the renderer needs: readiness chips
  * (viewport match / warm-up / scroll gate) answer "will the render match what
@@ -12,6 +15,7 @@
 'use strict';
 
 const EASES = ['linear', 'natural', ...Object.keys(globalThis.TapewormEasing.NAMED)];
+const SETTING_INPUTS = [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']];
 const $ = (id) => document.getElementById(id);
 
 let tabId = null;
@@ -59,11 +63,26 @@ chrome.runtime.onMessage.addListener((msg) => {
 // ---------------------------------------------------------------- state
 async function saveState() {
   await chrome.storage.session.set({ ['doc:' + tabId]: state });
+  // Mirror authored work into chrome.storage.local under the page's domain:
+  // session storage dies with the browser, local survives restarts and
+  // extension updates. A fresh timeline isn't worth mirroring — and writing
+  // one would clobber the autosave syncPage is about to restore.
+  const dom = docDomain();
+  if (dom && state.steps.length > 1) {
+    try { await chrome.storage.local.set({ ['wip:' + dom]: state }); } catch (e) {} // quota — the session copy still stands
+  }
 }
 
 async function loadState() {
   const got = await chrome.storage.session.get('doc:' + tabId);
   if (got['doc:' + tabId]) state = got['doc:' + tabId];
+}
+
+/** The site a timeline belongs to: its pinned start url's domain, else the page's. */
+function docDomain() {
+  const start = state.steps[0];
+  const url = (start && start.type === 'start' && start.url) || currentPageUrl;
+  try { return new URL(url).hostname; } catch (e) { return ''; }
 }
 
 function stripInternal(step) {
@@ -835,7 +854,7 @@ chrome.tabs.onUpdated.addListener((id, changed) => {
   })().finally(() => { followingNav = false; });
 });
 
-for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
+for (const [id, key] of SETTING_INPUTS) {
   $(id).addEventListener('change', async () => {
     state.settings[key] = Number($(id).value);
     renderSetupSum();
@@ -932,15 +951,137 @@ $('copy').addEventListener('click', async () => {
 $('clear').addEventListener('click', () => {
   $('more').open = false;
   if (!confirm('Start over? This deletes the whole timeline.')) return;
+  const dom = docDomain(); // before the reset — the pinned url lives on the start step
+  if (dom) chrome.storage.local.remove('wip:' + dom); // else the autosave restores it right back
   state.steps = [{ type: 'start', at: 'top', hold: 0.8 }];
   expandedIndex = null;
   commit();
 });
 
-// the ⋯ menu is a <details>: close it when a click lands anywhere outside
+// ---------------------------------------------------------------- library
+/**
+ * Saved timelines — chrome.storage.local, so they survive browser restarts,
+ * extension reloads and updates; only uninstalling clears them (and the
+ * pinned manifest key keeps the extension ID, and with it this storage,
+ * stable across re-clones). The index is its own small key so listing the
+ * menu never loads the payloads — record steps carry sample arrays that run
+ * to hundreds of KB. Saves are immutable snapshots: loading one copies it
+ * into the working doc, and saving again makes a new entry.
+ */
+async function libIndex() {
+  const got = await chrome.storage.local.get('library:index');
+  return got['library:index'] || [];
+}
+
+async function librarySave() {
+  const entry = {
+    id: crypto.randomUUID(),
+    name: state.title || docDomain() || 'untitled',
+    domain: docDomain(),
+    savedAt: Date.now(),
+    steps: state.steps.length - 1, // the pinned start step isn't authored
+    seconds: totalSec,
+  };
+  await chrome.storage.local.set({
+    ['library:doc:' + entry.id]: state,
+    'library:index': [entry, ...(await libIndex())],
+  });
+}
+
+async function libraryLoad(id) {
+  const got = await chrome.storage.local.get('library:doc:' + id);
+  if (!got['library:doc:' + id]) return false;
+  state = got['library:doc:' + id];
+  expandedIndex = null;
+  for (const [inputId, key] of SETTING_INPUTS) $(inputId).value = String(state.settings[key]);
+  $('codec').value = state.codec || 'h264';
+  renderSetupSum();
+  await send('settings', state.settings);
+  commit();
+  return true;
+}
+
+async function libraryDelete(id) {
+  await chrome.storage.local.set({ 'library:index': (await libIndex()).filter((e) => e.id !== id) });
+  await chrome.storage.local.remove('library:doc:' + id);
+}
+
+async function renderLibrary() {
+  const wrap = $('lib-items');
+  wrap.innerHTML = '';
+  const save = document.createElement('button');
+  save.textContent = '＋ Save timeline';
+  save.disabled = state.steps.length < 2;
+  save.title = save.disabled ? 'Nothing to save yet — pick a first keyframe'
+    : 'Snapshot the current timeline into the library';
+  save.addEventListener('click', async () => {
+    try { await librarySave(); } catch (e) {
+      wrap.prepend(libLine('lib-empty', 'Couldn\'t save — storage is full. Delete old saves first. (' +
+        String((e && e.message) || e) + ')'));
+      return;
+    }
+    renderLibrary();
+  });
+  wrap.append(save);
+  const index = await libIndex();
+  if (!index.length) { wrap.append(libLine('lib-empty', 'Nothing saved yet.')); return; }
+  const dom = docDomain();
+  const here = index.filter((e) => e.domain === dom);
+  const elsewhere = index.filter((e) => e.domain !== dom);
+  if (dom && !here.length) wrap.append(libLine('lib-empty', 'Nothing saved for ' + dom + ' yet.'));
+  for (const e of here) wrap.append(libRow(e, false));
+  if (elsewhere.length) {
+    wrap.append(libLine('lib-divider', 'other sites'));
+    for (const e of elsewhere) wrap.append(libRow(e, true));
+  }
+}
+
+function libRow(entry, elsewhere) {
+  const row = document.createElement('div');
+  row.className = 'lib-row';
+  const load = document.createElement('button');
+  load.className = 'lib-load';
+  load.title = 'Load this timeline' + (elsewhere ? ' (its start step points back at ' + entry.domain + ')' : '');
+  const when = new Date(entry.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  load.append(
+    libLine('lib-name', entry.name),
+    libLine('lib-meta', (elsewhere ? entry.domain + ' · ' : '') + entry.seconds.toFixed(1) + 's · ' +
+      entry.steps + (entry.steps === 1 ? ' step · ' : ' steps · ') + when),
+  );
+  load.addEventListener('click', async () => {
+    if (state.steps.length > 1 &&
+        !confirm('Replace the current timeline with "' + entry.name + '"? Save it first if you want it back.')) return;
+    if (await libraryLoad(entry.id)) $('lib').open = false;
+    else { await libraryDelete(entry.id); renderLibrary(); } // payload gone — prune the orphaned row
+  });
+  const del = document.createElement('button');
+  del.className = 'icon';
+  del.textContent = '✕';
+  del.title = 'Delete this save';
+  del.addEventListener('click', async () => {
+    if (!confirm('Delete "' + entry.name + '"?')) return;
+    await libraryDelete(entry.id);
+    renderLibrary();
+  });
+  row.append(load, del);
+  return row;
+}
+
+function libLine(cls, text) {
+  const s = document.createElement('span');
+  s.className = cls;
+  s.textContent = text;
+  return s;
+}
+
+// rebuilt on every open — another panel (or Start over) may have changed the library
+$('lib').addEventListener('toggle', () => { if ($('lib').open) renderLibrary(); });
+
+// the footer menus are <details>: close them when a click lands anywhere outside
 document.addEventListener('click', (ev) => {
-  const more = $('more');
-  if (more.open && !more.contains(ev.target)) more.open = false;
+  for (const menu of document.querySelectorAll('details.menu')) {
+    if (menu.open && !menu.contains(ev.target)) menu.open = false;
+  }
 });
 
 // ---------------------------------------------------------------- boot
@@ -1011,15 +1152,21 @@ function connectLifeline() {
 async function syncPage() {
   connectLifeline();
   await loadState();
-  for (const [id, key] of [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']]) {
-    $(id).value = String(state.settings[key]);
+  const info = await send('info');
+  if (info) onPageInfo(info); // also sets currentPageUrl — the autosave key below
+  // A fresh doc adopts the site's autosaved timeline: the session copy died
+  // with the browser, but the last thing authored here lives on in
+  // chrome.storage.local. Start over… is how you decline the restore.
+  if (state.steps.length <= 1) {
+    const dom = docDomain();
+    const got = dom ? await chrome.storage.local.get('wip:' + dom) : {};
+    if (got['wip:' + dom]) { state = got['wip:' + dom]; await saveState(); }
   }
+  for (const [id, key] of SETTING_INPUTS) $(id).value = String(state.settings[key]);
   $('codec').value = state.codec || 'h264'; // pre-codec saved states lack the field
   renderSetupSum();
   setWarmed(warmed);
   renderSteps();
-  const info = await send('info');
-  if (info) onPageInfo(info);
   await send('settings', state.settings);
   refreshDuration();
 }

@@ -168,3 +168,15 @@ footer select { width: auto; }
   box-shadow: 0 4px 18px rgb(0 0 0 / 0.18); }
 .menu .menu-items button { border: none; justify-content: flex-start; }
 .menu .menu-items button:hover { background: var(--bg); }
+
+/* ------------------------------------------------------------- saves library */
+#lib .menu-items { min-width: 230px; max-width: 280px; max-height: 320px; overflow-y: auto; }
+.lib-row { display: flex; align-items: center; }
+.lib-row .lib-load { flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 1px; }
+.lib-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-meta { font-family: var(--mono); font-size: 9.5px; color: var(--muted); }
+.lib-row .icon { flex: 0 0 auto; padding: 2px 6px; color: var(--muted); }
+.lib-row .icon:hover { color: var(--bad); background: none; }
+.lib-empty { font-size: 11px; color: var(--muted); padding: 4px 6px; line-height: 1.4; }
+.lib-divider { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+               padding: 6px 6px 2px; border-top: 1px solid var(--line-soft); margin-top: 4px; }

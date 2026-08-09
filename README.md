@@ -336,6 +336,8 @@ Because author mode *is* the render environment, it's also the tiebreaker: if th
 
 The extension can't send trusted input, so a scroll-gated intro (see above) has to be scrolled through by hand once — the overlay tells you when that's the case. The renderer still unlocks it automatically at capture time.
 
+Timelines persist: the working timeline is autosaved per site (reopening the panel on a site restores where you left off), and 🗂 in the footer keeps a library of saved snapshots to toggle between, listed per site. Both live in the browser's extension storage, which survives browser restarts and extension updates — see the extension README for details.
+
 Exported configs carry a `meta` block (`authoredWith`, `authoredAt`, `authoredViewport`, `url`) that the renderer ignores but keeps for diagnosing authoring/render drift.
 
 The extension ships `src/shared/*.js` verbatim (selector generation, anchor resolution, easing) — `npm run sync-shared` copies them, and a test fails if the copies drift. That shared core is why the picker, the preview, and the render agree.

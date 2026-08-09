@@ -84,6 +84,17 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    `page.substitute` rules in the config. Warm up first so lazy-loaded media
    makes the list; the record is per-document (a reload starts it over) and
    top-frame only — iframe embeds keep their own timelines.
+9. **🗂 Saves** (footer): snapshot the current timeline into a library and
+   load past ones back — the current site's saves listed first, everything
+   else behind an "other sites" divider. Saves are immutable snapshots
+   (loading copies one into the working timeline; saving again makes a new
+   entry), stored in `chrome.storage.local`, so they survive browser
+   restarts, extension reloads and updates — only uninstalling clears them
+   (and the pinned manifest key keeps the storage stable across re-clones,
+   see above). The working timeline is also autosaved per site: opening the
+   panel with an empty timeline on a site you've authored on restores where
+   you left off. **Start over…** clears the timeline *and* the site's
+   autosave — the library is untouched.
 
 If the page is scroll-gated (the overlay will say so), scroll through the intro
 by hand once to unlock it, then author. The renderer unlocks it automatically at
@@ -99,7 +110,8 @@ icons/               the 🪱 emoji rendered to PNG at 16/32/48/128 (Apple Color
 content/overlay.js   viewport badge, picker, preview — chrome-free; `tapeworm
                      author` injects this same file over CDP
 content/bridge.js    the only content file that touches chrome.*
-sidepanel/           the editor (state in chrome.storage.session)
+sidepanel/           the editor (working state in chrome.storage.session;
+                     saves library + per-site autosave in chrome.storage.local)
 shared/              byte-identical copies of src/shared/*.js — the same
                      selector, anchor, and easing code the renderer runs
 ```

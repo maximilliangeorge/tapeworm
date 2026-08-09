@@ -9,6 +9,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Saved timelines.** The extension now persists recordings: 🗂 in the panel
+  footer snapshots the current timeline into a per-site library — the current
+  site's saves listed first — and loads or deletes past ones. The working
+  timeline is also autosaved per site, so reopening the panel on a site
+  restores where you left off (**Start over…** clears that autosave). Both
+  live in `chrome.storage.local`, which survives browser restarts, extension
+  reloads and updates; only uninstalling clears it.
+
 - **Export assets.** The extension's ⋯ menu can now download
   `<hostname>.assets.json` — a record of every URL the current page has
   fetched, sorted biggest first, with request counts and bytes where the
