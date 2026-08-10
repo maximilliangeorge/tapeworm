@@ -326,6 +326,9 @@ function onPickClick(ev) {
     quality: best.quality,
     unique: best.unique,
     resolvedY: safeResolve(anchor),
+    // the page's URL at the moment of the pick — the panel's cached copy can
+    // be stale (SPA route changes never re-announce page:info)
+    url: location.href,
   });
 }
 
@@ -360,7 +363,9 @@ function startRecording() {
   if (recording) return { error: 'already-recording' };
   if (preview && preview.playing) return { error: 'preview-playing' };
   stopPicker(); // ESC must mean exactly one thing at a time
-  recording = { t0: performance.now(), last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0, clickTarget: null };
+  // the URL is captured at the START of the take: an SPA route change while
+  // recording moves location.href, but the replay begins where this page was
+  recording = { t0: performance.now(), url: location.href, last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0, clickTarget: null };
   addEventListener('pointermove', onRecPointer, { capture: true, passive: true });
   addEventListener('pointerdown', onRecDown, { capture: true, passive: true });
   addEventListener('pointerup', onRecUp, { capture: true, passive: true });
@@ -458,6 +463,7 @@ function buildTake(rec, cutoffMs) {
     // an honest stamp is what makes that check mean something
     viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
     durationMs: lastT,
+    url: rec.url,
   };
 }
 
@@ -498,6 +504,7 @@ function onRecPageHide() {
   emit('record:split', {
     take: buildTake(rec, lastDown.t), // null when the click came almost immediately
     click: rec.clickTarget,
+    url: rec.url, // the take may be null — the split still knows its page
   });
 }
 

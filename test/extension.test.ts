@@ -288,6 +288,7 @@ test('record mode: real input is sampled per display frame, ESC finishes with on
   assert.deepEqual(plain(d.buttons), [{ t: 100, action: 'down' }, { t: 150, action: 'up' }]);
   assert.deepEqual(plain(d.viewport), { width: 1000, height: 700, dpr: 2 }, 'the ACTUAL window, honestly stamped');
   assert.equal(d.durationMs, 200);
+  assert.equal(d.url, 'https://example.com/', 'the take carries the page it was recorded on');
 
   // listeners are gone: further input goes nowhere
   w.__dispatch('pointermove', { clientX: 999, clientY: 999 });
@@ -355,6 +356,7 @@ test('a navigation mid-recording splits the take at the last click: record + cli
     anchor: { selector: '#cta', fallbackText: 'Read more' },
     quality: 'id',
   });
+  assert.equal(d.url, 'https://example.com/', 'the split still knows the page the take began on');
 
   // the recording is fully torn down: further input goes nowhere
   w.__dispatch('pointermove', { clientX: 999, clientY: 999 });

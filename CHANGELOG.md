@@ -201,6 +201,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Extension: **the pinned starting URL is now read from the page at the moment
+  the first keyframe or recording is created**, not from the panel's cached
+  copy of the URL it attached on. On single-page sites, browsing to another
+  route before picking the first keyframe used to pin the route the panel was
+  opened on (client-side navigations never re-announce the page), exporting a
+  config that started in the wrong place. Pick and record events now carry the
+  page's live URL — a recording pins the page it *started* on. The start
+  step's editor also gains a **⌖ Pin this page** button that resets the
+  starting URL to wherever the tab is now.
+
 - Extension: **Scroll-to steps on the far side of a navigation now preview.**
   A move step whose anchor only exists on the page a preceding click
   navigates to was silently dropped from the preview geometry — its selector

@@ -92,12 +92,21 @@ function stripInternal(step) {
 }
 
 // ---------------------------------------------------------------- events from the page
-function onPicked(d) {
-  // The first keyframe pins the timeline to the page it was authored on.
-  // Navigating later (a recorded click, or just browsing) must not re-point
-  // the config — the early selectors only exist back there.
+/**
+ * The first keyframe (or recording) pins the timeline to the page it was
+ * authored on. Navigating later (a recorded click, or just browsing) must not
+ * re-point the config — the early selectors only exist back there. The url
+ * comes stamped on the pick/record event itself: the panel's cached
+ * currentPageUrl was read when it attached, and SPA route changes never
+ * refresh it.
+ */
+function pinStartUrl(url) {
   const start = state.steps[0];
-  if (start && start.type === 'start' && !start.url && currentPageUrl) start.url = currentPageUrl;
+  if (start && start.type === 'start' && !start.url && url) start.url = url;
+}
+
+function onPicked(d) {
+  pinStartUrl(d.url || currentPageUrl);
   if (d.mode === 'click' || d.mode === 'hover') {
     state.steps.push({ type: d.mode, target: d.anchor, _quality: d.quality });
     setPicking(null); // interactions arm for ONE pick — back to normal after
@@ -110,9 +119,7 @@ function onPicked(d) {
 }
 
 function onRecorded(d) {
-  // Same url-pinning dance as onPicked: the recording belongs to THIS page.
-  const start = state.steps[0];
-  if (start && start.type === 'start' && !start.url && currentPageUrl) start.url = currentPageUrl;
+  pinStartUrl(d.url || currentPageUrl); // the recording belongs to the page it STARTED on
   const step = { type: 'record', samples: d.samples, viewport: d.viewport };
   if (d.buttons && d.buttons.length) step.buttons = d.buttons;
   state.steps.push(step);
@@ -131,8 +138,7 @@ function onRecorded(d) {
  * `picking` before this resumes) still ends the whole take.
  */
 async function onRecordSplit(d) {
-  const start = state.steps[0];
-  if (start && start.type === 'start' && !start.url && currentPageUrl) start.url = currentPageUrl;
+  pinStartUrl(d.url || currentPageUrl);
   if (d.take) {
     const step = { type: 'record', samples: d.take.samples, viewport: d.take.viewport };
     if (d.take.buttons && d.take.buttons.length) step.buttons = d.take.buttons;
@@ -463,7 +469,7 @@ function renderSteps() {
 
     if (step.type === 'start') {
       const label = span('sel muted', 'start at ' + anchorLabel(step.at) +
-        (step.url ? ' — ' + shortUrl(step.url) : ' (url pinned on first pick)'));
+        (step.url ? ' — ' + shortUrl(step.url) : ' (url pinned by the first keyframe)'));
       if (step.url) label.title = step.url;
       row1.append(label);
     } else if (step.type === 'hold') {
@@ -507,6 +513,26 @@ function renderSteps() {
     ed.addEventListener('click', (ev) => ev.stopPropagation());
     if (step.type === 'start') {
       ed.append(field('hold s', numInput(step.hold, 0.8, (v) => { step.hold = v == null ? undefined : v; commit(); })));
+      const t = div('tools');
+      const note = noteLine(step.url ? 'starts at ' + shortUrl(step.url) : 'url not pinned yet — set by the first keyframe or recording');
+      if (step.url) note.title = step.url;
+      t.append(note);
+      const pin = document.createElement('button');
+      pin.textContent = '⌖ Pin this page';
+      pin.title = 'Reset the starting URL to the page the tab is on now — the render and preview will begin there';
+      pin.addEventListener('click', async () => {
+        // ask the page itself first (the live URL); the tab record covers a
+        // navigated-away tab whose content scripts are gone
+        const info = await send('info');
+        let url = (info && info.url) || '';
+        if (!url) { try { url = (await chrome.tabs.get(tabId)).url || ''; } catch (e) {} }
+        if (!url) url = currentPageUrl;
+        if (!url) return;
+        step.url = url;
+        commit();
+      });
+      t.append(pin);
+      ed.append(t);
     } else if (step.type === 'hold') {
       ed.append(field('seconds', numInput(step.seconds, 1, (v) => { step.seconds = v == null ? 1 : v; commit(); })));
       ed.append(tools(i));
