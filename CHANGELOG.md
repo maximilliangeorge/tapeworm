@@ -30,7 +30,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   force `--jobs 1` (the render notes it); the pre-render probe reports embeds
   that can't be controlled — unknown providers, dead handshakes — which
   free-run as before. YouTube embeds get `enablejsapi=1` added to their src at
-  discovery.
+  discovery. The pre-render probe also notes an embed shorter than the
+  timeline — it holds its last frame from its duration on, which otherwise
+  looks like the render breaking halfway through.
 
 - **Vimeo SDK `timeupdate` events keep flowing while an embed is driven.** A
   paused Vimeo player never emits the `timeupdate` stream a playing one does,

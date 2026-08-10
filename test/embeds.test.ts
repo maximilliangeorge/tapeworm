@@ -28,7 +28,14 @@ function bootEmbeds(over: { mode?: 'sync' | 'freeze' | 'ignore'; location?: unkn
     addMessageListener: (type: string, cb: (ev: { data: unknown; source: unknown }) => void) => {
       if (type === 'message') listeners.push(cb);
     },
-    dispatchMessage: (iframe: unknown, json: string) => announced.push({ iframe, msg: JSON.parse(json) }),
+    // The real dispatcher fires a genuine MessageEvent sourced from the iframe
+    // — which is what the page SDK's provenance checks want, and also exactly
+    // what the controller's own router matches on. Echo it here so the
+    // self-send guard is under test instead of assumed.
+    dispatchMessage: (iframe: any, json: string) => {
+      announced.push({ iframe, msg: JSON.parse(json) });
+      listeners.forEach((l) => l({ data: json, source: iframe?.contentWindow }));
+    },
     nearViewport: () => true,
   };
   const controller = ctx.TapewormEmbeds.createController(env);
@@ -321,6 +328,25 @@ test('vimeo: play is announced once, then re-armed by the player\'s real pause',
   assert.deepEqual(b.announced.slice(4).map((a) => a.msg.event), ['play', 'timeupdate']);
   await step(5);
   assert.deepEqual(b.announced.slice(6).map((a) => a.msg.event), ['timeupdate'], 'and settles back to quiet');
+});
+
+test('vimeo: the controller ignores its own announce — no self-inflicted pause', async () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+
+  // the frame that announces play is the one that can echo: the synthetic play
+  // returns through the router sourced from the iframe, and acted on it would
+  // trip the autoplay defense — commanding the player to pause immediately
+  // after we told the page it was playing
+  sent.length = 0;
+  const wait = b.controller.sync(2);
+  b.deliver({ event: 'seeked', data: { seconds: 2 + 0.5 / 60 } }, iframe.contentWindow);
+  await wait;
+  assert.deepEqual(b.announced.map((a) => a.msg.event), ['play', 'timeupdate'], 'the announce still goes out');
+  const pauses = sent.filter((p) => p.msg.method === 'pause');
+  assert.equal(pauses.length, 1, 'only the pause the seek itself posts — none from hearing ourselves');
 });
 
 test('vimeo: freeze mode announces no play — nothing is pretending to advance', async () => {

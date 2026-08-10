@@ -325,7 +325,17 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
       }
       if (probeEmbeds) {
         const report = await lead.session.eval<any[]>('window.__sr.embedReport()');
+        const timelineSec = total / cfg.fps;
         for (const e of report ?? []) {
+          // A healthy embed shorter than the timeline is the quietest way for a
+          // render to look broken: seeks clamp at its duration and it holds its
+          // last frame, silently, for the rest of the video. Say so up front.
+          if (e.ready && typeof e.duration === 'number' && e.duration > 0 && e.duration < timelineSec - 0.5) {
+            notes.push(
+              `embed "${e.src}" runs ${e.duration.toFixed(1)}s but the timeline runs ${timelineSec.toFixed(1)}s — ` +
+                `it holds its last frame from there on (provider embeds don't loop).`,
+            );
+          }
           if (e.ok) continue;
           if (!e.controllable) {
             notes.push(`cross-origin iframe "${e.src}" is not a known video provider — it cannot be controlled and will free-run.`);
