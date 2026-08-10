@@ -168,7 +168,7 @@ test('vimeo: sync re-broadcasts a timeupdate for the page SDK once the seek sett
   assert.equal(a.msg.data.percent, Math.round((target / 30) * 1000) / 1000);
 });
 
-test('vimeo: past the end — one pinned timeupdate, one ended, then silence; a backwards jump revives', async () => {
+test('vimeo: past the end — one pinned timeupdate, never a forged ended, then silence; a backwards jump revives', async () => {
   const b = bootEmbeds();
   const { iframe } = fakeIframe(VIMEO_SRC);
   b.controller.scan(iframe);
@@ -181,20 +181,45 @@ test('vimeo: past the end — one pinned timeupdate, one ended, then silence; a 
   };
 
   await step(100); // way past the 30s duration
-  assert.deepEqual(b.announced.map((a) => a.msg.event), ['timeupdate', 'ended']);
+  assert.deepEqual(b.announced.map((a) => a.msg.event), ['timeupdate'], 'no ended — end-state UI must stay in the page\'s hands');
   assert.deepEqual(b.announced[0].msg.data, { seconds: 30, percent: 1, duration: 30 }, 'final timeupdate pins at the duration');
-  assert.deepEqual(b.announced[1].msg.data, b.announced[0].msg.data, 'ended carries the same end-state payload');
 
   await step(101); // still past the end: a really-ended player goes quiet
-  assert.equal(b.announced.length, 2, 'no repeats after ended');
+  assert.equal(b.announced.length, 1, 'no repeats past the end');
 
   await step(2); // jump back before the end
-  assert.equal(b.announced.length, 3);
-  assert.equal(b.announced[2].msg.event, 'timeupdate');
-  assert.equal(b.announced[2].msg.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
+  assert.equal(b.announced.length, 2);
+  assert.equal(b.announced[1].msg.event, 'timeupdate');
+  assert.equal(b.announced[1].msg.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
 
-  await step(100); // and past the end again: ended re-fires once
-  assert.deepEqual(b.announced.slice(3).map((a) => a.msg.event), ['timeupdate', 'ended']);
+  await step(100); // and past the end again: the pin re-fires once
+  assert.deepEqual(b.announced.slice(2).map((a) => a.msg.event), ['timeupdate']);
+  assert.equal(b.announced[2].msg.data.percent, 1);
+});
+
+test('an embed that mounts mid-capture plays from its own zero, not the render clock', async () => {
+  const b = bootEmbeds();
+  await b.controller.sync(5); // capture is 5s in before the embed exists (a click just opened it)
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  sent.length = 0;
+
+  const wait = b.controller.sync(7); // first frame with the embed present
+  const seekMsg = sent.find((p) => p.msg.method === 'setCurrentTime');
+  assert.ok(seekMsg, 'seeks the newborn embed');
+  assert.ok(Math.abs(seekMsg.msg.value - 0.5 / 60) < 1e-9, 'starts at its own 0, not at 7s');
+  b.deliver({ event: 'seeked', data: { seconds: seekMsg.msg.value } }, iframe.contentWindow);
+  await wait;
+  assert.equal(b.announced[0].msg.data.seconds, Math.round((0.5 / 60) * 1000) / 1000, 'announced time is embed-local too');
+
+  sent.length = 0;
+  const wait2 = b.controller.sync(9); // two render-seconds later → two embed-seconds in
+  const seekMsg2 = sent.find((p) => p.msg.method === 'setCurrentTime');
+  assert.ok(seekMsg2, 'seeks on the later frame too');
+  assert.ok(Math.abs(seekMsg2.msg.value - (2 + 0.5 / 60)) < 1e-9, 'advances on the embed\'s own clock');
+  b.deliver({ event: 'seeked', data: { seconds: seekMsg2.msg.value } }, iframe.contentWindow);
+  await wait2;
 });
 
 test('vimeo: an unready embed announces nothing', async () => {
