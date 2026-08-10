@@ -1,7 +1,6 @@
 # Distribution, render server, and the commercial shape
 
-**Status:** nothing here is built. Written 2026-08-10 as the plan for what
-follows the authoring work in `authoring-plan.md`. Three tracks, in the order
+**Status:** nothing here is built. Written 2026-08-10. Three tracks, in the order
 they unblock each other: get the extension onto teammates' machines, get
 rendering off the laptop, decide the licence before anyone else touches the
 code.
@@ -34,7 +33,7 @@ they are the product:
   nothing can drop a frame. Output is deterministic and identical across runs.
 - **The choreography is a document.** A timeline is JSON — versionable,
   diffable, re-runnable against the site six months later, and (because frame
-  *N* never depends on frame *N−1*) splittable across as many machines as you
+  _N_ never depends on frame _N−1_) splittable across as many machines as you
   point at it.
 
 That last property is also the commercial argument. A screen recording is a
@@ -54,17 +53,17 @@ one.
 
 Four routes exist. Only two auto-update, and one of those needs managed Chrome.
 
-| Route | Auto-updates | Needs | Verdict |
-| --- | --- | --- | --- |
-| Load unpacked from a clone | No — `git pull` then ⟳ | Node, and remembering `npm run sync-shared` | Keep it. The developer path, not the distribution path. |
-| Zip → unzip → load unpacked | No | Nothing | Strictly worse than the clone for anyone who has Node. Only wins for someone who doesn't. |
-| Self-hosted `.crx` + `update_url` | Yes | Managed Chrome, MDM or Workspace policy | Chrome blocks off-store CRX installs on unmanaged profiles. Viable only if the team's browsers are already policy-managed. |
-| **Chrome Web Store, unlisted** | **Yes** | $5 one-off, a listing, review turnaround | **Do this.** Installable by link, not searchable. |
+| Route                             | Auto-updates           | Needs                                       | Verdict                                                                                                                    |
+| --------------------------------- | ---------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Load unpacked from a clone        | No — `git pull` then ⟳ | Node, and remembering `npm run sync-shared` | Keep it. The developer path, not the distribution path.                                                                    |
+| Zip → unzip → load unpacked       | No                     | Nothing                                     | Strictly worse than the clone for anyone who has Node. Only wins for someone who doesn't.                                  |
+| Self-hosted `.crx` + `update_url` | Yes                    | Managed Chrome, MDM or Workspace policy     | Chrome blocks off-store CRX installs on unmanaged profiles. Viable only if the team's browsers are already policy-managed. |
+| **Chrome Web Store, unlisted**    | **Yes**                | $5 one-off, a listing, review turnaround    | **Do this.** Installable by link, not searchable.                                                                          |
 
 An unlisted store item is the only route that gets real auto-updates without
 touching device policy, and it front-loads the review process onto a low-stakes
 internal release rather than onto launch day. If everyone is on a Workspace
-domain, the store's *private* visibility narrows it to the org.
+domain, the store's _private_ visibility narrows it to the org.
 
 ### Two things that will surprise people
 
@@ -254,9 +253,9 @@ is the cheapest option value here.
 
 ## Decisions outstanding
 
-| Question | Why it matters |
-| --- | --- |
-| Is the team's Chrome managed by Workspace or MDM? | If yes, a self-hosted CRX works and store review is unnecessary. Changes Track 1 entirely. |
-| Does the extension version stay locked to the CLI version? | Locked is simpler while the config format moves, but costs a store upload per CLI patch. Recommend locked for now. |
-| Does the renderer stay MIT? | MIT is a real commitment to the compile-it-yourself promise, and a real invitation to be hosted by someone else. Recommend MIT renderer, restrictive server. |
-| What hardware is in the NAS? | Sets whether `--jobs` helps, and whether this is a two-minute or twenty-minute wait. |
+| Question                                                   | Why it matters                                                                                                                                               |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Is the team's Chrome managed by Workspace or MDM?          | If yes, a self-hosted CRX works and store review is unnecessary. Changes Track 1 entirely.                                                                   |
+| Does the extension version stay locked to the CLI version? | Locked is simpler while the config format moves, but costs a store upload per CLI patch. Recommend locked for now.                                           |
+| Does the renderer stay MIT?                                | MIT is a real commitment to the compile-it-yourself promise, and a real invitation to be hosted by someone else. Recommend MIT renderer, restrictive server. |
+| What hardware is in the NAS?                               | Sets whether `--jobs` helps, and whether this is a two-minute or twenty-minute wait.                                                                         |

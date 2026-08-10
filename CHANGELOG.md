@@ -9,6 +9,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cursor smoothing (opt-in).** A `record` step now takes
+  `"smoothing": true` or `{ "mode": "denoise", "strength": 0..1 }`: the
+  recorded pointer path is resolved through a zero-phase Gaussian kernel, so
+  hand tremor and capture stairsteps disappear while the route and timing stay
+  yours. The path is pinned to the raw positions at button edges and the
+  take's ends — clicks and a drag's grab/release land exactly where recorded;
+  the route between them (drags included) is smoothed, so the dispatched
+  hover/drag path can differ slightly from the live capture. Scroll is never
+  smoothed, and the default remains verbatim replay. The extension's
+  record-step editor gains the matching off/light/medium/strong control, and
+  its preview plays the smoothed path.
+
 - **Embed control.** YouTube and Vimeo iframes no longer free-run (and so play
   visibly too fast) in the output: tapeworm now drives them through their
   postMessage player APIs — paused, muted, and seeked to each frame's
@@ -234,7 +246,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - The router's **page transition stays in the video**. During capture, a
   navigating click returns immediately instead of waiting the new view in: the
   transition plays across the settle frames, driven per-frame by the virtual
-  clock like any other animation a click starts. Those frames are *free* — the
+  clock like any other animation a click starts. Those frames are _free_ — the
   page owns the scroll while the router swaps views (the outgoing view stays at
   the click offset; the router jumps to top at mount), so no offset is imposed
   and no scroll drift is reported there. When the click has no explicit
@@ -244,7 +256,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 - A navigating click is now replayed from the scroll offset it was authored at.
   The track pinned each interaction to a frame only, and the capture pass fired
-  it from *that frame's* offset — but a navigating click puts its own frame at
+  it from _that frame's_ offset — but a navigating click puts its own frame at
   the top of the destination, so the click was dispatched at scroll 0 on the
   page it was supposed to be leaving. It landed on whichever element sat there,
   and the render was a convincing video of the wrong thing. Interactions now
