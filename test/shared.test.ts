@@ -338,6 +338,43 @@ test('button edges stay pinned: a press on a sample is bit-exact, off-sample wit
   assert.ok(d < 1, `press lands within a device pixel of the recorded spot (off by ${d})`);
 });
 
+test('pinning must not re-expose raw tremor around a click (regression: mouse-up jank)', () => {
+  const { TapewormGesture: G } = bootShared();
+  // A decelerating approach with sinusoidal hand tremor, clicking at the end —
+  // the shape that made the original blend-toward-raw pinning visibly wobble
+  // at press/release while the rest of the path was glassy.
+  const mk = (smoothing?: boolean) => {
+    const t: number[] = [], x: number[] = [], y: number[] = [], s: number[] = [];
+    for (let i = 0; i <= 90; i++) {
+      const p = Math.min(1, (i * 16) / 700);
+      const ease = 1 - Math.pow(1 - p, 3);
+      t.push(i * 16);
+      x.push(Math.round(100 + 400 * ease + 3 * Math.sin(i * 2.1)));
+      y.push(Math.round(300 - 80 * ease + 3 * Math.sin(i * 1.7 + 1)));
+      s.push(0);
+    }
+    const buttons: Array<{ t: number; action: 'down' | 'up' }> = [
+      { t: 487, action: 'down' },
+      { t: 587, action: 'up' },
+    ];
+    return smoothing === undefined ? { samples: { t, x, y, s }, buttons } : { samples: { t, x, y, s }, buttons, smoothing };
+  };
+  // Worst frame-to-frame speed CHANGE across the click (down@487ms → up@587ms
+  // at 60fps is frames ~29–35; the window covers both pin ramps).
+  const maxJerk = (rec: ReturnType<typeof mk>) => {
+    const { frames } = G.resample(rec, 60);
+    let prevV: number | null = null, worst = 0;
+    for (let n = 26; n <= 40; n++) {
+      const v = Math.hypot(frames[n].x - frames[n - 1].x, frames[n].y - frames[n - 1].y);
+      if (prevV != null) worst = Math.max(worst, Math.abs(v - prevV));
+      prevV = v;
+    }
+    return worst;
+  };
+  assert.ok(maxJerk(mk()) > 2, 'the raw tremor is really there — otherwise this test proves nothing');
+  assert.ok(maxJerk(mk(true)) < 1, 'smoothed speed through the click changes gradually — no wobble at press or release');
+});
+
 test('a drag\'s route is smoothed but its grab and release points hold still', () => {
   const { TapewormGesture: G } = bootShared();
   const buttons: Array<{ t: number; action: 'down' | 'up' }> = [
