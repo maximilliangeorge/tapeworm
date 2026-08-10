@@ -222,6 +222,43 @@ test('an embed that mounts mid-capture plays from its own zero, not the render c
   await wait2;
 });
 
+test('vimeo: readiness via SDK chatter does not stop the duration hunt — knock keeps asking', () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  // the page's own SDK traffic readies the session without answering getDuration
+  b.deliver({ event: 'ready' }, iframe.contentWindow);
+  const r = b.controller.report()[0];
+  assert.equal(r.ready, true);
+  assert.equal(r.duration, null);
+
+  sent.length = 0;
+  b.fire(); // next knock: still hunting for the duration
+  assert.ok(sent.some((p) => p.msg.method === 'getDuration'), 'keeps asking after ready');
+  assert.ok(!sent.some((p) => p.msg.method === 'addEventListener'), 'subscriptions are not re-posted once ready');
+
+  b.deliver({ method: 'getDuration', value: 120 }, iframe.contentWindow);
+  sent.length = 0;
+  b.fire();
+  assert.ok(!sent.some((p) => p.msg.method === 'getDuration'), 'stops once the duration arrives');
+});
+
+test('vimeo: duration harvested from a seeked ack keeps the announced percent honest', async () => {
+  const b = bootEmbeds();
+  const { iframe } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ event: 'ready' }, iframe.contentWindow); // ready, duration unknown
+
+  const wait = b.controller.sync(30);
+  const target = 30 + 0.5 / 60;
+  // real seeked acks carry {seconds, percent, duration} — the ack itself teaches us the duration
+  b.deliver({ event: 'seeked', data: { seconds: target, percent: 0.25, duration: 120 } }, iframe.contentWindow);
+  await wait;
+  assert.equal(b.announced.length, 1);
+  assert.equal(b.announced[0].msg.data.duration, 120);
+  assert.equal(b.announced[0].msg.data.percent, Math.round((target / 120) * 1000) / 1000, 'percent no longer stuck at 0');
+});
+
 test('vimeo: an unready embed announces nothing', async () => {
   const b = bootEmbeds();
   const { iframe } = fakeIframe(VIMEO_SRC);

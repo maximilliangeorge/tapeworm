@@ -85,10 +85,18 @@ const VIMEO = {
     const slot = pendingSlot(env);
     const s = { provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null, birth: null };
     let tries = 0;
+    // Ready and duration are separate goals: readiness flips on ANY message
+    // out of the player window — which on a page using the Vimeo SDK is
+    // usually the SDK's own chatter, not our getDuration ack (posted while
+    // the player was still booting, into no listener). Duration is what the
+    // announce's percent — a page scrubber's whole input — divides by, so
+    // keep asking until it actually arrives.
     const knock = () => {
-      if (s.ready || tries++ >= KNOCK_TRIES) return;
-      post({ method: 'addEventListener', value: 'seeked' });
-      post({ method: 'addEventListener', value: 'play' });
+      if ((s.ready && s.duration != null) || tries++ >= KNOCK_TRIES) return;
+      if (!s.ready) {
+        post({ method: 'addEventListener', value: 'seeked' });
+        post({ method: 'addEventListener', value: 'play' });
+      }
       post({ method: 'getDuration' });
       env.nSetTimeout(knock, KNOCK_INTERVAL);
     };
@@ -102,6 +110,12 @@ const VIMEO = {
         post({ method: 'setVolume', value: 0 });
       }
       if (data.method === 'getDuration' && typeof data.value === 'number') s.duration = data.value;
+      // duration also rides along on every event the player broadcasts
+      // (seeked, timeupdate, durationchange…) — harvest it wherever it
+      // appears, so a lost getDuration ack can't starve the scrubber
+      if (data.data && typeof data.data.duration === 'number' && data.data.duration > 0) {
+        s.duration = data.data.duration;
+      }
       if (data.event === 'play') post({ method: 'pause' }); // autoplay defense: the iframe runs on the real clock
       const sec = data.event === 'seeked' && data.data && typeof data.data.seconds === 'number'
         ? data.data.seconds
