@@ -35,6 +35,18 @@ const TOLERANCE = 0.3;
 const KNOCK_INTERVAL = 500;
 const KNOCK_TRIES = 20;
 
+/**
+ * A synthetic announce is a real MessageEvent carrying the iframe as its
+ * source (that's what makes a page SDK accept it), which is exactly what this
+ * file's own router matches on — so without a guard the controller hears its
+ * own fabrications and acts on them: a synthetic `play` would trip the
+ * autoplay defense and command a redundant pause on an already-paused player.
+ * Tagging the payload would work too, but it would also be visible to the
+ * page; the announce has to stay byte-identical to a real broadcast. Dispatch
+ * is synchronous, so a flag around it is enough — listeners run inline.
+ */
+let announcing = false;
+
 /** Wait bounds for one seek — seekVideo's exact values, for the same reason:
  *  never let one stubborn player hang the whole render. */
 function seekTimeoutMs(env, iframe) {
@@ -196,7 +208,11 @@ const VIMEO = {
     });
     s.announce = (tSec) => {
       if (!s.ready || !env.dispatchMessage) return;
-      const emit = (event, data) => env.dispatchMessage(iframe, JSON.stringify({ event, data }));
+      const emit = (event, data) => {
+        announcing = true;
+        try { env.dispatchMessage(iframe, JSON.stringify({ event, data })); }
+        finally { announcing = false; }
+      };
       const past = s.duration > 0 && tSec + 0.5 / env.fps > s.duration - 0.05; // seekTarget's clamp condition
       if (!past) {
         s.endAnnounced = false;
@@ -296,6 +312,7 @@ function createController(env) {
   let listening = false;
 
   function route(ev) {
+    if (announcing) return; // our own announce, echoed back by the dispatcher
     let data = ev.data;
     if (typeof data === 'string') {
       try { data = JSON.parse(data); } catch (e) { return; }

@@ -200,6 +200,7 @@ Honest caveats, because this path is best-effort where the native one is exact:
 
 - **Provider seeks are keyframe-coarse.** The player snaps to what's buffered and keyed, so an embed can sit a couple hundred ms off the exact frame time. Fine in a scrollthrough; not a mastering path.
 - **Sync-mode embeds force `--jobs 1`.** Each parallel worker would buffer the stream independently, and a shard boundary could land inside the embed on a visibly different frame. The render says so when it clamps; `--embeds freeze` or `ignore` restores parallelism.
+- **An embed shorter than the timeline holds its last frame.** Provider embeds don't loop, so once the render's clock passes the video's duration every seek clamps there and the picture stops moving — for a 10s video in a 20s render, exactly halfway. That's the video ending, not the render breaking; the pre-render probe now says so. Shorten the timeline, or accept the still.
 - **YouTube embeds need `enablejsapi=1`** in the iframe URL. tapeworm adds it automatically at discovery (which reloads the iframe — harmless during page load/pre-warm, and only ever during a render).
 - **An embed nobody wrote an adapter for** (or one that never answers the handshake — consent walls inside the iframe do this) free-runs on the wall clock exactly as before, and the pre-render probe names it. There is no way to freeze an arbitrary cross-origin iframe from outside; composite separately if it matters.
 - YouTube may still inject ads; no API controls that.
