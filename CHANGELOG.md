@@ -43,9 +43,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
   would. Each embed gets a birth time: one that mounts mid-render (a
   click-opened overlay player) is seeked from its own zero rather than the
   render's global clock, so it plays from its start instead of beginning
-  midway — or frozen past its end. `ended`, `play`/`pause` state and
-  `cuepoint` are deliberately not faked — `ended` in particular makes pages
-  close their player on camera (rationale in `src/embeds-core.js`). YouTube
+  midway — or frozen past its end. A `play` event leads the stream, so a
+  page's play/pause button shows the playing state instead of reading the real
+  `pause` that tapeworm's autoplay defense provokes and sitting on the wrong
+  icon for the whole render; it is restated whenever the player emits a real
+  `pause`. That means a page's own `play` handler runs during a render
+  (analytics, pause-other-players logic) — `freeze` or `ignore` if that
+  matters. `pause`, `ended` and `cuepoint` are deliberately not faked —
+  `ended` in particular makes pages close their player on camera (rationale in
+  `src/embeds-core.js`). YouTube
   pages need no equivalent: the widget already updates every registered page
   listener on each seek.
 
