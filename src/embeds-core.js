@@ -83,7 +83,7 @@ const VIMEO = {
   prepareSrc: null,
   createSession(iframe, post, env) {
     const slot = pendingSlot(env);
-    const s = { provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null };
+    const s = { provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null, birth: null };
     let tries = 0;
     const knock = () => {
       if (s.ready || tries++ >= KNOCK_TRIES) return;
@@ -131,14 +131,18 @@ const VIMEO = {
      * the player rounds its own.
      *
      * Past the video's end (seekTarget clamps there), real playback would
-     * have stopped: pin one final timeupdate at the duration, fire `ended`
-     * once, then go quiet the way a really-ended player does. Page
-     * end-of-video UI (replay buttons, end cards) still triggers, while the
-     * iframe itself never ends — so Vimeo's own end screen stays out of the
-     * render.
+     * have stopped: pin one final timeupdate at the duration, then go quiet
+     * the way a really-ended player does. A backwards jump revives the
+     * stream, like a real re-seek.
      *
      * Deliberately NOT synthesized, so a future adapter author doesn't
      * "complete" this into a bug:
+     * - ended: state-shaped, and empirically hazardous — pages close or hide
+     *   their player UI when the video finishes, so a forged `ended` blanks
+     *   the embed for the rest of the render (this happened on a real site;
+     *   an early version here forged it and the player vanished). The pinned
+     *   final timeupdate at percent 1 carries the same information without
+     *   commanding anyone's UI.
      * - play/playing/pause: the player genuinely is paused. Forging `play`
      *   buys a cosmetic fix (play buttons showing the playing icon on
      *   camera) at the cost of real side effects — analytics beacons,
@@ -165,14 +169,13 @@ const VIMEO = {
       const emit = (event, data) => env.dispatchMessage(iframe, JSON.stringify({ event, data }));
       const past = s.duration > 0 && tSec + 0.5 / env.fps > s.duration - 0.05; // seekTarget's clamp condition
       if (!past) {
-        s.endedAnnounced = false; // a backwards jump revives the stream, like a real re-seek
+        s.endAnnounced = false;
         emit('timeupdate', payload(s.want != null ? s.want : seekTarget(tSec, env.fps, s.duration)));
         return;
       }
-      if (s.endedAnnounced) return;
-      s.endedAnnounced = true;
+      if (s.endAnnounced) return;
+      s.endAnnounced = true;
       emit('timeupdate', payload(s.duration));
-      emit('ended', payload(s.duration));
     };
     return s;
   },
@@ -208,7 +211,7 @@ const YOUTUBE = {
   createSession(iframe, post, env) {
     const slot = pendingSlot(env);
     const id = ytNextId++;
-    const s = { provider: 'youtube', ready: false, duration: null, currentTime: 0, want: null };
+    const s = { provider: 'youtube', ready: false, duration: null, currentTime: 0, want: null, birth: null };
     const command = (func, args) => post({ event: 'command', func, args: args || [], id, channel: 'widget' });
     let tries = 0;
     const knock = () => {
@@ -317,18 +320,34 @@ function createController(env) {
     root.querySelectorAll('iframe').forEach(track);
   }
 
+  let everSynced = false;
+
   function sync(tSec) {
     if (env.mode !== 'sync') {
       if (env.mode === 'freeze') sessions.forEach((s) => { if (s.ready) s.pause(); });
       return Promise.resolve();
     }
+    // Birth time, the embed analogue of an animation's: an embed that mounts
+    // mid-capture (a click-opened overlay player) plays from its own zero.
+    // Seeking it to the render's global clock would start it mid-video — or
+    // past its end entirely for a spot shorter than the render, freezing it
+    // on its last frame before it ever showed one. Sessions present at the
+    // first sync were there from the start, so global time IS their time.
+    sessions.forEach((s) => { if (s.birth == null) s.birth = everSynced ? tSec : 0; });
+    everSynced = true;
     const waits = [];
-    sessions.forEach((s) => { const p = s.seek(tSec); if (p) waits.push(p); });
+    const locals = new Map();
+    sessions.forEach((s) => {
+      const local = Math.max(0, tSec - s.birth);
+      locals.set(s, local);
+      const p = s.seek(local);
+      if (p) waits.push(p);
+    });
     const settled = waits.length ? Promise.all(waits) : Promise.resolve();
     // announce after the seeks settle and before the caller paints, so a page
     // SDK reacting to the synthetic event has its DOM update in the frame
     return settled.then(() => {
-      sessions.forEach((s) => { if (s.announce) s.announce(tSec); });
+      sessions.forEach((s) => { if (s.announce) s.announce(locals.get(s)); });
     });
   }
 

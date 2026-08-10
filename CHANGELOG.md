@@ -38,13 +38,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
   highlights) froze at 0 under embed control. In sync mode tapeworm now
   re-broadcasts each frame's timestamp as the player's own `timeupdate`
   message — correct origin and source, so the SDK's checks pass — and the UI
-  tracks the render timeline. Past the embed's duration, tapeworm fires the
-  SDK's `ended` once and then goes quiet, as real playback would, so
-  end-of-video page UI still triggers while the iframe never shows Vimeo's
-  own end screen. `play`/`pause` state and `cuepoint` are deliberately not
-  faked (rationale in `src/embeds-core.js`). YouTube pages need no
-  equivalent: the widget already updates every registered page listener on
-  each seek.
+  tracks the render timeline. Past the embed's duration the stream pins one
+  final `timeupdate` at `percent: 1` and goes quiet, as a finished player
+  would. Each embed gets a birth time: one that mounts mid-render (a
+  click-opened overlay player) is seeked from its own zero rather than the
+  render's global clock, so it plays from its start instead of beginning
+  midway — or frozen past its end. `ended`, `play`/`pause` state and
+  `cuepoint` are deliberately not faked — `ended` in particular makes pages
+  close their player on camera (rationale in `src/embeds-core.js`). YouTube
+  pages need no equivalent: the widget already updates every registered page
+  listener on each seek.
 
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
