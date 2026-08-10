@@ -159,10 +159,14 @@ test('vimeo: sync re-broadcasts a timeupdate for the page SDK once the seek sett
   const target = 2 + 0.5 / 60;
   b.deliver({ event: 'seeked', data: { seconds: target } }, iframe.contentWindow);
   await wait;
-  assert.equal(b.announced.length, 1);
-  const a = b.announced[0];
+  assert.deepEqual(
+    b.announced.map((x) => x.msg.event),
+    ['play', 'timeupdate'],
+    'play leads, so a page gating its scrubber on play state is playing before the time arrives',
+  );
+  const a = b.announced[1];
   assert.equal(a.iframe, iframe, 'sourced from the embed iframe');
-  assert.equal(a.msg.event, 'timeupdate');
+  assert.deepEqual(b.announced[0].msg.data, a.msg.data, 'play carries the frame\'s time, not zero');
   assert.equal(a.msg.data.seconds, Math.round(target * 1000) / 1000);
   assert.equal(a.msg.data.duration, 30);
   assert.equal(a.msg.data.percent, Math.round((target / 30) * 1000) / 1000);
@@ -181,20 +185,23 @@ test('vimeo: past the end — one pinned timeupdate, never a forged ended, then 
   };
 
   await step(100); // way past the 30s duration
-  assert.deepEqual(b.announced.map((a) => a.msg.event), ['timeupdate'], 'no ended — end-state UI must stay in the page\'s hands');
+  assert.deepEqual(
+    b.announced.map((a) => a.msg.event),
+    ['timeupdate'],
+    'no ended — end-state UI must stay in the page\'s hands; and no play, a stopped player isn\'t playing',
+  );
   assert.deepEqual(b.announced[0].msg.data, { seconds: 30, percent: 1, duration: 30 }, 'final timeupdate pins at the duration');
 
   await step(101); // still past the end: a really-ended player goes quiet
   assert.equal(b.announced.length, 1, 'no repeats past the end');
 
   await step(2); // jump back before the end
-  assert.equal(b.announced.length, 2);
-  assert.equal(b.announced[1].msg.event, 'timeupdate');
-  assert.equal(b.announced[1].msg.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
+  assert.deepEqual(b.announced.slice(1).map((a) => a.msg.event), ['play', 'timeupdate'], 'the revived stream leads with play');
+  assert.equal(b.announced[2].msg.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
 
   await step(100); // and past the end again: the pin re-fires once
-  assert.deepEqual(b.announced.slice(2).map((a) => a.msg.event), ['timeupdate']);
-  assert.equal(b.announced[2].msg.data.percent, 1);
+  assert.deepEqual(b.announced.slice(3).map((a) => a.msg.event), ['timeupdate']);
+  assert.equal(b.announced[3].msg.data.percent, 1);
 });
 
 test('an embed that mounts mid-capture plays from its own zero, not the render clock', async () => {
@@ -254,9 +261,10 @@ test('vimeo: duration harvested from a seeked ack keeps the announced percent ho
   // real seeked acks carry {seconds, percent, duration} — the ack itself teaches us the duration
   b.deliver({ event: 'seeked', data: { seconds: target, percent: 0.25, duration: 120 } }, iframe.contentWindow);
   await wait;
-  assert.equal(b.announced.length, 1);
-  assert.equal(b.announced[0].msg.data.duration, 120);
-  assert.equal(b.announced[0].msg.data.percent, Math.round((target / 120) * 1000) / 1000, 'percent no longer stuck at 0');
+  const tu = b.announced.find((a) => a.msg.event === 'timeupdate');
+  assert.ok(tu);
+  assert.equal(tu.msg.data.duration, 120);
+  assert.equal(tu.msg.data.percent, Math.round((target / 120) * 1000) / 1000, 'percent no longer stuck at 0');
 });
 
 test('vimeo: an unready embed announces nothing', async () => {
@@ -275,6 +283,53 @@ test('vimeo: a play event triggers an immediate re-pause', () => {
   sent.length = 0;
   b.deliver({ event: 'play' }, iframe.contentWindow);
   assert.ok(sent.some((p) => p.msg.method === 'pause'));
+});
+
+test('vimeo: subscribes to pause — a page with no SDK of its own would never broadcast one', () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  const subs = sent.filter((p) => p.msg.method === 'addEventListener').map((p) => p.msg.value);
+  assert.deepEqual(subs.sort(), ['pause', 'play', 'seeked']);
+});
+
+test('vimeo: play is announced once, then re-armed by the player\'s real pause', async () => {
+  const b = bootEmbeds();
+  const { iframe } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+
+  const step = async (tSec: number) => {
+    const wait = b.controller.sync(tSec);
+    b.deliver({ event: 'seeked', data: { seconds: tSec + 0.5 / 60 } }, iframe.contentWindow);
+    await wait;
+  };
+
+  await step(1);
+  await step(2);
+  await step(3);
+  assert.deepEqual(
+    b.announced.map((a) => a.msg.event),
+    ['play', 'timeupdate', 'timeupdate', 'timeupdate'],
+    'stated once — a page play handler firing every frame would spam analytics and any parent listeners',
+  );
+
+  // the control's own autoplay defense pauses the embed for real; the page SDK
+  // hears it and flips its button back, so the next frame has to restate play
+  b.deliver({ event: 'pause' }, iframe.contentWindow);
+  await step(4);
+  assert.deepEqual(b.announced.slice(4).map((a) => a.msg.event), ['play', 'timeupdate']);
+  await step(5);
+  assert.deepEqual(b.announced.slice(6).map((a) => a.msg.event), ['timeupdate'], 'and settles back to quiet');
+});
+
+test('vimeo: freeze mode announces no play — nothing is pretending to advance', async () => {
+  const b = bootEmbeds({ mode: 'freeze' });
+  const { iframe } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  await b.controller.sync(2);
+  assert.equal(b.announced.length, 0);
 });
 
 // ---------------------------------------------------------------- youtube

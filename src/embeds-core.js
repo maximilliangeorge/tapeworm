@@ -83,7 +83,7 @@ const VIMEO = {
   prepareSrc: null,
   createSession(iframe, post, env) {
     const slot = pendingSlot(env);
-    const s = { provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null, birth: null };
+    const s = { provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null, birth: null, playAnnounced: false };
     let tries = 0;
     // Ready and duration are separate goals: readiness flips on ANY message
     // out of the player window — which on a page using the Vimeo SDK is
@@ -96,6 +96,11 @@ const VIMEO = {
       if (!s.ready) {
         post({ method: 'addEventListener', value: 'seeked' });
         post({ method: 'addEventListener', value: 'play' });
+        // not for us to act on — it re-arms the synthetic `play` below. Subscribe
+        // rather than rely on the page's own SDK having asked for it: on a page
+        // that doesn't, the player would never broadcast one and the announce
+        // would stay stale after a real pause.
+        post({ method: 'addEventListener', value: 'pause' });
       }
       post({ method: 'getDuration' });
       env.nSetTimeout(knock, KNOCK_INTERVAL);
@@ -117,6 +122,9 @@ const VIMEO = {
         s.duration = data.data.duration;
       }
       if (data.event === 'play') post({ method: 'pause' }); // autoplay defense: the iframe runs on the real clock
+      // that pause lands as a real `pause` the page hears too, undoing our
+      // synthetic `play` — re-arm so the next announce restates it
+      if (data.event === 'pause') s.playAnnounced = false;
       const sec = data.event === 'seeked' && data.data && typeof data.data.seconds === 'number'
         ? data.data.seconds
         : data.method === 'setCurrentTime' && typeof data.value === 'number' ? data.value : null;
@@ -149,20 +157,28 @@ const VIMEO = {
      * the way a really-ended player does. A backwards jump revives the
      * stream, like a real re-seek.
      *
+     * `play` is synthesized too, once, ahead of the first timeupdate. The
+     * player genuinely is paused, so this is a lie — but the alternative is a
+     * worse one: the control's own autoplay defense pauses the embed, the page
+     * SDK hears that real `pause`, and every frame of the output shows a play
+     * button sitting on the wrong icon while the video visibly advances behind
+     * it. A wrong control on every frame is a wrong recording. The cost is
+     * real and accepted: a page's play handler runs during the render, so
+     * analytics beacons fire, pause-other-players logic runs, and
+     * pause-on-scroll handlers may fight this controller. A page that can't
+     * take that wants mode 'freeze' or 'ignore'.
+     *
      * Deliberately NOT synthesized, so a future adapter author doesn't
      * "complete" this into a bug:
+     * - pause: nothing needs it. The page hears the player's real pauses, and
+     *   a synthetic one would only undo the `play` above.
      * - ended: state-shaped, and empirically hazardous — pages close or hide
      *   their player UI when the video finishes, so a forged `ended` blanks
      *   the embed for the rest of the render (this happened on a real site;
      *   an early version here forged it and the player vanished). The pinned
      *   final timeupdate at percent 1 carries the same information without
-     *   commanding anyone's UI.
-     * - play/playing/pause: the player genuinely is paused. Forging `play`
-     *   buys a cosmetic fix (play buttons showing the playing icon on
-     *   camera) at the cost of real side effects — analytics beacons,
-     *   pause-other-players logic, pause-on-scroll handlers that would fight
-     *   this controller. If a page gates its timeupdate handling on play
-     *   state, make it an opt-in, not a default.
+     *   commanding anyone's UI. Past the end no `play` is announced either —
+     *   a stopped player isn't playing.
      * - cuepoint: cue points are registered by the page SDK directly with
      *   the player and fire only when playback *crosses* them, which paused
      *   seeks never do. Feasible (getCuePoints, then emit as frame times
@@ -184,7 +200,14 @@ const VIMEO = {
       const past = s.duration > 0 && tSec + 0.5 / env.fps > s.duration - 0.05; // seekTarget's clamp condition
       if (!past) {
         s.endAnnounced = false;
-        emit('timeupdate', payload(s.want != null ? s.want : seekTarget(tSec, env.fps, s.duration)));
+        const at = payload(s.want != null ? s.want : seekTarget(tSec, env.fps, s.duration));
+        // `play` before `timeupdate`: a page that gates its scrubber on play
+        // state has to be playing before the time it renders arrives
+        if (!s.playAnnounced) {
+          s.playAnnounced = true;
+          emit('play', at);
+        }
+        emit('timeupdate', at);
         return;
       }
       if (s.endAnnounced) return;
