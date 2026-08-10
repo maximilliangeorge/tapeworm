@@ -183,7 +183,19 @@ This is the part most tools get wrong. Every `<video>` is paused, seeked to the 
 
 **If a video won't seek, the tool tells you which and why** — it probes before the render rather than after. The most common cause is a server that ignores HTTP Range requests: `currentTime` assignment silently no-ops and every frame shows the same picture with no error anywhere. Python's `http.server` does this, so a locally-served page will hit it.
 
-**Won't work, no workaround:** DRM/EME content (captures black), cross-origin embeds like YouTube and Vimeo (the inner `<video>` is unreachable and adaptive anyway), live streams. Use `"freeze"` and composite separately.
+### Embeds (YouTube, Vimeo)
+
+A cross-origin embed's inner `<video>` is unreachable (cross-origin DOM in a separate renderer process), so embeds get their own mechanism: tapeworm drives the provider's player through its postMessage API from the top frame — pausing it, muting it, and seeking it to each frame's timestamp. `page.embeds` (CLI `--embeds`) takes the same three modes as `page.video` and **defaults to whatever `page.video` is**, so most configs never mention it; set it separately when you want native videos synced but an embed frozen.
+
+Honest caveats, because this path is best-effort where the native one is exact:
+
+- **Provider seeks are keyframe-coarse.** The player snaps to what's buffered and keyed, so an embed can sit a couple hundred ms off the exact frame time. Fine in a scrollthrough; not a mastering path.
+- **Sync-mode embeds force `--jobs 1`.** Each parallel worker would buffer the stream independently, and a shard boundary could land inside the embed on a visibly different frame. The render says so when it clamps; `--embeds freeze` or `ignore` restores parallelism.
+- **YouTube embeds need `enablejsapi=1`** in the iframe URL. tapeworm adds it automatically at discovery (which reloads the iframe — harmless during page load/pre-warm, and only ever during a render).
+- **An embed nobody wrote an adapter for** (or one that never answers the handshake — consent walls inside the iframe do this) free-runs on the wall clock exactly as before, and the pre-render probe names it. There is no way to freeze an arbitrary cross-origin iframe from outside; composite separately if it matters.
+- YouTube may still inject ads; no API controls that.
+
+**Won't work, no workaround:** DRM/EME content (captures black), live streams, non-YouTube/Vimeo embeds. Use `"freeze"` (native video) and composite separately.
 
 ### Substituting assets
 
@@ -305,6 +317,7 @@ tapeworm <config.json> | <url> | -     # - reads the config from stdin
     --auto             discover sections instead of using the config timeline
     --sections <n>     how many sections --auto visits, default 6
     --video <mode>     sync | freeze | ignore
+    --embeds <mode>    same modes for YouTube/Vimeo iframes, default: follows --video
     --clock <mode>     virtual | real
     --cursor <image>   replace the drawn gesture cursor; "none" hides it
     --prewarm <mode>   full | cache | none, default full
@@ -358,6 +371,8 @@ The extension ships `src/shared/*.js` verbatim (selector generation, anchor reso
 
 **Video is one frozen frame** — check the note in the output. Almost always Range requests.
 
+**An embed free-runs or won't seek** — check the pre-render note: an embed nobody wrote an adapter for can't be controlled at all, a dead handshake (consent wall inside the iframe) means the player never listened, and a seek miss means the provider snapped to a keyframe. `--embeds freeze` pauses a controllable embed instead of chasing it.
+
 **A page breaks with the virtual clock** — `--clock real`. You lose deterministic JS animation timing but keep everything else, including video seeking.
 
 Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
@@ -368,7 +383,7 @@ Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
 
 - **Inner scroll containers** aren't supported — only the document scroller.
 - **Full-page-section hijackers** (fullPage.js, Webflow page sections) need per-library adapters that don't exist yet.
-- **Cross-origin iframes** are opaque: their animations and video can't be controlled.
+- **Cross-origin iframes** are opaque — except YouTube and Vimeo embeds, which are driven through their player postMessage APIs (best-effort and keyframe-coarse; see "Embeds"). Anything else in an iframe free-runs.
 - **Recorded gestures replay only on the layout they were captured on**: a `record` step refuses a different viewport, and a recorded click that loads a new document is refused (client-side route changes replay; for document loads the authoring tools split the take into `record` → `click` → `record` automatically).
 - **No motion blur.** The correct approach is supersampling — render at 4–8× the frame rate in sub-frame steps and average — which isn't implemented. It would come free from the existing frame-index model.
 - **No audio.** By design; this is a picture pipeline.

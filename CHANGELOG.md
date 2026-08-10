@@ -9,6 +9,17 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Embed control.** YouTube and Vimeo iframes no longer free-run (and so play
+  visibly too fast) in the output: tapeworm now drives them through their
+  postMessage player APIs — paused, muted, and seeked to each frame's
+  timestamp. New `page.embeds` / `--embeds` takes the same
+  `sync | freeze | ignore` modes as `page.video` and defaults to following it.
+  Provider seeks are keyframe-coarse and best-effort, so sync-mode embeds
+  force `--jobs 1` (the render notes it); the pre-render probe reports embeds
+  that can't be controlled — unknown providers, dead handshakes — which
+  free-run as before. YouTube embeds get `enablejsapi=1` added to their src at
+  discovery.
+
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
   site's saves listed first — and loads or deletes past ones. The working

@@ -302,6 +302,16 @@ export function resolveConfig(input: Config): Resolved {
     outPath += codec === 'prores' ? '.mov' : '.mp4';
   }
 
+  const videoModes = ['sync', 'freeze', 'ignore'];
+  const video = input.page?.video ?? 'sync';
+  if (!videoModes.includes(video)) {
+    throw new Error(`page.video must be sync, freeze or ignore (got "${video}")`);
+  }
+  const embeds = input.page?.embeds ?? video;
+  if (!videoModes.includes(embeds)) {
+    throw new Error(`page.embeds must be sync, freeze or ignore (got "${embeds}")`);
+  }
+
   const prewarmMode: 'full' | 'cache' | 'none' =
     input.prewarm?.mode ??
     (input.prewarm?.enabled === false ? 'none' : input.prewarm?.reloadAfter ? 'cache' : 'full');
@@ -359,7 +369,8 @@ export function resolveConfig(input: Config): Resolved {
       clock: input.page?.clock ?? 'virtual',
       seekAnimations: input.page?.seekAnimations ?? true,
       cursor: resolveCursor(input.page?.cursor, url),
-      video: input.page?.video ?? 'sync',
+      video,
+      embeds,
       css: input.page?.css ?? '',
       script: input.page?.script ?? '',
       settle: input.page?.settle ?? 0,

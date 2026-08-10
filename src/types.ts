@@ -198,6 +198,13 @@ export type Config = {
      */
     cursor?: boolean | { image: string; tip?: [number, number]; size?: number };
     video?: VideoMode;
+    /**
+     * Same modes, applied to provider embeds (YouTube/Vimeo iframes), driven
+     * through their postMessage player APIs — best-effort and keyframe-coarse,
+     * unlike the frame-exact native <video> path. Defaults to `video`'s value.
+     * 'sync' embeds force jobs=1 (provider seeks buffer per worker).
+     */
+    embeds?: VideoMode;
     /** Extra CSS injected before the page's own scripts run. */
     css?: string;
     /** Extra JS injected before the page's own scripts run. */
@@ -285,6 +292,7 @@ export type Resolved = {
      */
     cursor: false | { image: string | null; tipX: number; tipY: number; size: number };
     video: VideoMode;
+    embeds: VideoMode;
     css: string;
     script: string;
     settle: number;
