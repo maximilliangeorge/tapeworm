@@ -407,6 +407,16 @@ function recDuration(step) {
   return t.length ? t[t.length - 1] / 1000 : 0;
 }
 
+// The smoothing select's labels ↔ the config's strength values. `true` is the
+// config shorthand for strength 0.5, so it reads back as 'medium'.
+const SMOOTHING_STRENGTHS = { light: 0.25, medium: 0.5, strong: 0.85 };
+
+function smoothingLabel(sm) {
+  if (!sm) return 'off';
+  const k = typeof sm === 'object' && typeof sm.strength === 'number' ? sm.strength : 0.5;
+  return k <= 0.35 ? 'light' : k <= 0.65 ? 'medium' : 'strong';
+}
+
 function durLabel(step, i) {
   const s = spanFor(i);
   if (step.type === 'start') return 'hold ' + (step.hold != null ? step.hold : 0.8).toFixed(1) + 's';
@@ -470,7 +480,8 @@ function renderSteps() {
     } else if (step.type === 'record') {
       const clicks = (step.buttons || []).filter((b) => b.action === 'down').length;
       row1.append(span('sel', '● recording — ' + recDuration(step).toFixed(1) + 's · ' +
-        step.samples.t.length + ' samples' + (clicks ? ' · ' + clicks + ' click' + (clicks === 1 ? '' : 's') : '')));
+        step.samples.t.length + ' samples' + (clicks ? ' · ' + clicks + ' click' + (clicks === 1 ? '' : 's') : '') +
+        (step.smoothing ? ' · smoothed' : '')));
     } else {
       row1.append(span('sel', step.type + ' (not executable yet)'), badge('warn'));
     }
@@ -520,9 +531,16 @@ function renderSteps() {
         : 'emulated in preview (effects persist — reload to reset); real input in render'));
       ed.append(t);
     } else if (step.type === 'record') {
-      ed.append(field('hold s', numInput(step.hold, '0', (v) => { step.hold = v == null ? undefined : v; commit(); })));
+      ed.append(
+        field('smoothing', selectInput(['off', 'light', 'medium', 'strong'], smoothingLabel(step.smoothing), (v) => {
+          if (v === 'off') delete step.smoothing;
+          else step.smoothing = { mode: 'denoise', strength: SMOOTHING_STRENGTHS[v] };
+          commit();
+        })),
+        field('hold s', numInput(step.hold, '0', (v) => { step.hold = v == null ? undefined : v; commit(); })),
+      );
       const t = tools(i);
-      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview emulates the hover and clicks (effects persist — reload to reset) — drags render-only'));
+      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview emulates the hover and clicks (effects persist — reload to reset) — drags render-only · smoothing eases the cursor path; clicks and drag endpoints stay put'));
       ed.append(t);
     } else {
       ed.append(tools(i));

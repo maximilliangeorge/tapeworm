@@ -9,6 +9,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cursor smoothing (opt-in).** A `record` step now takes
+  `"smoothing": true` or `{ "mode": "denoise", "strength": 0..1 }`: the
+  recorded pointer path is resolved through a zero-phase Gaussian kernel, so
+  hand tremor and capture stairsteps disappear while the route and timing stay
+  yours. The path is pinned to the raw positions at button edges and the
+  take's ends — clicks and a drag's grab/release land exactly where recorded;
+  the route between them (drags included) is smoothed, so the dispatched
+  hover/drag path can differ slightly from the live capture. Scroll is never
+  smoothed, and the default remains verbatim replay. The extension's
+  record-step editor gains the matching off/light/medium/strong control, and
+  its preview plays the smoothed path.
+
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
   site's saves listed first — and loads or deletes past ones. The working

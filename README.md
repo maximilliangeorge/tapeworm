@@ -121,6 +121,7 @@ That covers both kinds of navigation. A document load is spotted with a marker t
   "samples": { "t": [0, 16, 33, …], "x": [512, 514, 519, …], "y": [300, 301, 303, …], "s": [0, 0, 2, …] },
   "buttons": [{ "t": 1204, "action": "down" }, { "t": 1287, "action": "up" }],
   "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "smoothing": true,
   "hold": 0.5
 }
 ```
@@ -135,13 +136,15 @@ The sprite is replaceable at render time — a branded pointer, a hand, a dot:
 
 `image` is a local image file (png/svg/gif/jpeg/webp — embedded into the render at config time, so a typo'd path fails before Chrome launches), or an `https:`/`data:` URL. `tip` is the [x, y] px inside the rendered sprite where the pointer tip sits — the point that lands on what the recording pointed at (default `[0, 0]`, the top-left corner). `size` is the rendered width in CSS px, height keeping the image's aspect (default 32). The press feedback (a slight shrink around the tip while a button is down) applies to a replacement sprite too. From the CLI, `--cursor hand.png` does the same and `--cursor none` hides it.
 
+**Cursor smoothing** is opt-in, per take: `"smoothing": true` (or `{ "mode": "denoise", "strength": 0..1 }` — `true` means strength 0.5) resolves the pointer path through a zero-phase Gaussian kernel instead of replaying the raw samples verbatim. Hand tremor and the integer stairsteps of capture disappear while the route and its timing stay yours — resolution is offline with the whole take known, so unlike a live filter there is no lag and no overshoot. The path is pinned back to the raw positions around every button edge and at the take's ends: presses, releases and a drag's grab/drop points land exactly where they were recorded. Everything between them — drag routes included — is smoothed, which is the honest cost of opting in: the pointer path the render *dispatches* (what gets hovered or dragged through mid-flight) can differ slightly from the live capture, which is why verbatim replay stays the default. Scroll is never smoothed. The extension's record-step editor exposes the same control (off / light / medium / strong), and its preview plays the smoothed path through the same shared core the render uses.
+
 Three rules keep recordings honest:
 
 - **The viewport is part of the recording.** The step stamps the viewport it was captured at, and a render at any other size is refused — breakpoints make a different size a different page, and scaling coordinates would click the wrong things. Fit the window before recording (the extension pushes you to), or set the config's `viewport` to the recorded size.
 - **Recorded clicks may route, but not load.** A recorded click that triggers a **client-side route change** replays fine: the document survives, the frames after the click were recorded on the destination view, and the render films straight through the transition. To make the far side resolvable, a recording that contains clicks is *replayed while the plan is built* — same as click steps — so a routed-to view gets settled and pre-warmed, and later anchors resolve there. A click that **loads a new document** is refused (at plan time, before a capture pass is wasted): the rest of the recording belongs to a page that no longer exists, and the load itself takes network wall-clock time no frame-indexed replay can reproduce. The authoring tools handle that for you — when a recorded click navigates to a new document, the take is automatically **split at that click** into `record` → `click` → `record`, and recording resumes on the destination (see the extension section below).
 - **The recording's scroll wins.** If the timeline stands somewhere else when the recording begins, the video cuts to the recording's starting offset — the plan warns with a ⚠ so you can add a `move` to its start first.
 
-The raw samples stay in the config on purpose: the sample-to-frame resolution (currently linear interpolation, in `shared/gesture-core.js`) can grow smoothing later, and existing recordings will simply re-resolve — no re-recording. Expect recorded scroll to be noisier than a `move` on `scroll-snap` pages: the page re-snaps offsets a human scroll passed through, and the drift note will say so.
+The raw samples stay in the config on purpose: the sample-to-frame resolution lives in `shared/gesture-core.js`, so turning `smoothing` on (or off, or up) simply re-resolves an existing recording — no re-recording, and future resolution modes get the same property. Expect recorded scroll to be noisier than a `move` on `scroll-snap` pages: the page re-snaps offsets a human scroll passed through, and the drift note will say so.
 
 `wait` remains format-only for now: it parses but is rejected with a clear message until it lands.
 

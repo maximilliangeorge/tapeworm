@@ -96,6 +96,17 @@ export type Step =
       /** Sparse left-button edges, chronological; the first must be 'down'. */
       buttons?: Array<{ t: number; action: 'down' | 'up' }>;
       /**
+       * Opt-in cursor smoothing: resolve the pointer path through a zero-phase
+       * Gaussian kernel instead of replaying the raw samples verbatim. `true`
+       * means strength 0.5; `strength` 0..1 scales the kernel width. The path
+       * is pinned to the raw positions at button edges and the take's ends, so
+       * clicks and drag grab/release points land exactly where recorded; the
+       * route BETWEEN them (drags included) is smoothed, so what the render
+       * hovers or drags through can differ slightly from the live capture.
+       * Absent/false = verbatim replay. Scroll is never smoothed.
+       */
+      smoothing?: boolean | { mode?: 'denoise'; strength?: number };
+      /**
        * The viewport this was recorded at. A render at a different size is
        * refused: breakpoints make it a different page, so the recorded
        * coordinates and scroll offsets would land on the wrong things.

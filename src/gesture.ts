@@ -13,6 +13,7 @@ import './shared/gesture-core.js';
 export type GestureRecording = {
   samples: { t: number[]; x: number[]; y: number[]; s: number[] };
   buttons?: Array<{ t: number; action: 'down' | 'up' }>;
+  smoothing?: boolean | { mode?: 'denoise'; strength?: number };
 };
 
 export type PointerFrame = { x: number; y: number; scroll: number; down: boolean };

@@ -203,6 +203,20 @@ test('malformed recordings fail with the index and the defect', () => {
   bad({ hold: -1 }, /"hold" must be seconds >= 0/);
 });
 
+test('cursor smoothing is validated: booleans and denoise objects pass, anything else fails loudly', () => {
+  for (const smoothing of [true, false, { mode: 'denoise' }, { strength: 0.7 }, { mode: 'denoise', strength: 0 }]) {
+    const r = resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, smoothing } as never] });
+    assert.deepEqual((r.timeline[1] as typeof REC & { smoothing: unknown }).smoothing, smoothing);
+  }
+  const bad = (smoothing: unknown, re: RegExp) =>
+    assert.throws(() => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, smoothing } as never] }), re);
+  bad('denoise', /smoothing must be a boolean or/);
+  bad({ mode: 'glide' }, /unknown "record" smoothing mode "glide" \(this version has: denoise\)/);
+  bad({ strength: 2 }, /strength must be a number from 0 to 1/);
+  bad({ strength: -0.1 }, /strength must be a number from 0 to 1/);
+  bad({ strength: 'high' }, /strength must be a number from 0 to 1/);
+});
+
 test('the start step can pin the url: used when config.url is absent, must agree when both exist', () => {
   const timeline = [
     { type: 'start', at: 'top', url: 'https://example.com/about' },
