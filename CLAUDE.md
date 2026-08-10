@@ -36,6 +36,7 @@ Details that look wrong but are deliberate:
 - Scroll-driven animations (`animation-timeline`) are *not* seeked: they're a pure function of scroll offset.
 - `prewarm` modes `cache`/`none` force `--jobs 1` because reveal state depends on the scroll path taken, not just position.
 - Videos are seeked per frame and awaited via `requestVideoFrameCallback`; each animation gets a "birth time" so mid-render starts don't snap to completion.
+- Provider embeds (YouTube/Vimeo) are OOPIFs the runtime never runs in — their clock is real. `src/embeds-core.js` controls them from the top frame via each provider's postMessage API, using the runtime's captured natives (the page's own timers/listeners are virtualised or shadowable). Best-effort by design: every wait has a native-timeout escape, and sync-mode embeds force `--jobs 1` because provider seeks buffer per worker. Not in `src/shared/` on purpose — sync-shared would ship it to the extension, where the YouTube `enablejsapi=1` src rewrite (which reloads the iframe) must never fire.
 
 ## Changelog
 

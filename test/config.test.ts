@@ -20,8 +20,28 @@ test('minimal config gets documented defaults', () => {
   assert.equal(r.prewarm.mode, 'full');
   assert.equal(r.page.clock, 'virtual');
   assert.equal(r.page.video, 'sync');
+  assert.equal(r.page.embeds, 'sync');
   assert.equal(r.page.unlockIntro.enabled, true);
   assert.ok(r.jobs >= 1);
+});
+
+test('page.embeds follows page.video unless set explicitly', () => {
+  assert.equal(resolveConfig({ ...BASE, page: { video: 'freeze' } }).page.embeds, 'freeze');
+  assert.equal(resolveConfig({ ...BASE, page: { video: 'ignore' } }).page.embeds, 'ignore');
+  const split = resolveConfig({ ...BASE, page: { video: 'sync', embeds: 'freeze' } });
+  assert.equal(split.page.video, 'sync');
+  assert.equal(split.page.embeds, 'freeze');
+});
+
+test('page.video and page.embeds reject unknown modes', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { video: 'syncc' as never } }),
+    /page.video must be sync, freeze or ignore/,
+  );
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { embeds: 'pause' as never } }),
+    /page.embeds must be sync, freeze or ignore/,
+  );
 });
 
 test('url is required and must parse', () => {
