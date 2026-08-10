@@ -64,8 +64,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   `page.substitute` rules. Collected passively via Resource Timing, so the
   extension still needs no permissions beyond `activeTab`.
 
-- **iPad Pro viewport preset.** The extension's viewport preset list now
-  includes iPad Pro 1366×1024 (landscape).
+- **iPad Pro viewport presets.** The extension's viewport preset list now
+  includes iPad Pro in both orientations — portrait 1024×1366 and landscape
+  1366×1024.
 
 - **Replaceable cursor sprite.** `page.cursor` now also accepts
   `{ image, tip?, size? }` to draw your own sprite during recorded-gesture
