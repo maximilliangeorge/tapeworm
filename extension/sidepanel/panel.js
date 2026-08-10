@@ -522,7 +522,7 @@ function renderSteps() {
     } else if (step.type === 'record') {
       ed.append(field('hold s', numInput(step.hold, '0', (v) => { step.hold = v == null ? undefined : v; commit(); })));
       const t = tools(i);
-      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview emulates the hover and clicks (effects persist — reload to reset) — drags render-only'));
+      t.prepend(noteLine('replays your real pointer, clicks and scroll in the render; preview emulates the hover, clicks and drags (effects persist — reload to reset) — isTrusted-gated widgets render-only'));
       ed.append(t);
     } else {
       ed.append(tools(i));

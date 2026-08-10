@@ -63,8 +63,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
   Raw samples stay in the config so future smoothing can re-resolve them
   without re-recording (resolution lives in `shared/gesture-core.js`,
   currently linear interpolation). The extension preview replays a
-  recording's scroll, traces a cursor dot, and emulates the hover under it
-  (untrusted, like hover steps); click and drag effects are render-only.
+  recording's scroll, traces a cursor dot (filled while the button is held),
+  and emulates the hover, clicks and drags under it with synthetic events
+  (untrusted, like hover steps): pointer-listener drags replay with the
+  button held — aimed at the capturing element when the page took
+  `setPointerCapture` — and a `draggable="true"` source replays as native
+  HTML5 drag-and-drop (dragstart → dragenter/dragover → drop where accepted →
+  dragend, with a real `DataTransfer`). Widgets that require `isTrusted`
+  input respond only in the render.
 
 - Extension: timeline steps can be **dragged to reorder** via a ⠿ grip on each
   row — the rows part to show where the step will land. The start step stays
