@@ -12,6 +12,7 @@ function bootEmbeds(over: { mode?: 'sync' | 'freeze' | 'ignore'; location?: unkn
   const timers: { cb: () => void; ms: number; id: number }[] = [];
   let nextTimer = 1;
   const listeners: ((ev: { data: unknown; source: unknown }) => void)[] = [];
+  const announced: { iframe: unknown; msg: any }[] = [];
   const ctx: any = { URL };
   if (over.location) ctx.location = over.location;
   vm.createContext(ctx);
@@ -27,11 +28,14 @@ function bootEmbeds(over: { mode?: 'sync' | 'freeze' | 'ignore'; location?: unkn
     addMessageListener: (type: string, cb: (ev: { data: unknown; source: unknown }) => void) => {
       if (type === 'message') listeners.push(cb);
     },
+    dispatchMessage: (iframe: unknown, json: string) => announced.push({ iframe, msg: JSON.parse(json) }),
     nearViewport: () => true,
   };
   const controller = ctx.TapewormEmbeds.createController(env);
   return {
     controller,
+    /** Synthetic events the controller asked the page to hear. */
+    announced,
     /** Deliver a message event as the browser would: parsed by the router. */
     deliver: (data: unknown, source: unknown) =>
       listeners.forEach((l) => l({ data: typeof data === 'string' ? data : JSON.stringify(data), source })),
@@ -145,6 +149,62 @@ test('vimeo: seek clamps to duration with no loop-wrap', () => {
   assert.equal(seekMsg!.msg.value, 29.95);
 });
 
+test('vimeo: sync re-broadcasts a timeupdate for the page SDK once the seek settles', async () => {
+  const b = bootEmbeds();
+  const { iframe } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  const wait = b.controller.sync(2);
+  assert.equal(b.announced.length, 0, 'nothing announced before the seek settles');
+  const target = 2 + 0.5 / 60;
+  b.deliver({ event: 'seeked', data: { seconds: target } }, iframe.contentWindow);
+  await wait;
+  assert.equal(b.announced.length, 1);
+  const a = b.announced[0];
+  assert.equal(a.iframe, iframe, 'sourced from the embed iframe');
+  assert.equal(a.msg.event, 'timeupdate');
+  assert.equal(a.msg.data.seconds, Math.round(target * 1000) / 1000);
+  assert.equal(a.msg.data.duration, 30);
+  assert.equal(a.msg.data.percent, Math.round((target / 30) * 1000) / 1000);
+});
+
+test('vimeo: past the end — one pinned timeupdate, one ended, then silence; a backwards jump revives', async () => {
+  const b = bootEmbeds();
+  const { iframe } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+
+  const step = async (tSec: number) => {
+    const wait = b.controller.sync(tSec);
+    b.deliver({ event: 'seeked', data: { seconds: Math.min(tSec + 0.5 / 60, 29.95) } }, iframe.contentWindow);
+    await wait;
+  };
+
+  await step(100); // way past the 30s duration
+  assert.deepEqual(b.announced.map((a) => a.msg.event), ['timeupdate', 'ended']);
+  assert.deepEqual(b.announced[0].msg.data, { seconds: 30, percent: 1, duration: 30 }, 'final timeupdate pins at the duration');
+  assert.deepEqual(b.announced[1].msg.data, b.announced[0].msg.data, 'ended carries the same end-state payload');
+
+  await step(101); // still past the end: a really-ended player goes quiet
+  assert.equal(b.announced.length, 2, 'no repeats after ended');
+
+  await step(2); // jump back before the end
+  assert.equal(b.announced.length, 3);
+  assert.equal(b.announced[2].msg.event, 'timeupdate');
+  assert.equal(b.announced[2].msg.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
+
+  await step(100); // and past the end again: ended re-fires once
+  assert.deepEqual(b.announced.slice(3).map((a) => a.msg.event), ['timeupdate', 'ended']);
+});
+
+test('vimeo: an unready embed announces nothing', async () => {
+  const b = bootEmbeds();
+  const { iframe } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe); // handshake never answered
+  await b.controller.sync(2);
+  assert.equal(b.announced.length, 0);
+});
+
 test('vimeo: a play event triggers an immediate re-pause', () => {
   const b = bootEmbeds();
   const { iframe, sent } = fakeIframe(VIMEO_SRC);
@@ -210,6 +270,7 @@ test('youtube: seek posts seekTo+pauseVideo and resolves on a close-enough infoD
   const r = b.controller.report()[0];
   assert.equal(r.ok, true);
   assert.equal(r.duration, 60);
+  assert.equal(b.announced.length, 0, 'youtube needs no synthetic events — the widget addresses page listeners itself');
 });
 
 test('youtube: playerState 1 in a delivery triggers a re-pause', () => {
@@ -244,6 +305,7 @@ test('freeze mode: sync() resolves immediately and pauses ready sessions', async
   await b.controller.sync(5);
   assert.ok(sent.some((p) => p.msg.method === 'pause'));
   assert.ok(!sent.some((p) => p.msg.method === 'setCurrentTime'), 'freeze never seeks');
+  assert.equal(b.announced.length, 0, 'frozen time gets no timeupdate');
 });
 
 test('unknown media-sized cross-origin iframe is reported, never messaged', () => {

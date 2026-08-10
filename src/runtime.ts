@@ -70,6 +70,7 @@ const nClearTimeout = window.clearTimeout.bind(window);
 const nDate = window.Date;
 const nPerfNow = window.performance.now.bind(window.performance);
 const nAddEventListener = window.addEventListener.bind(window);
+const nDispatchEvent = window.dispatchEvent.bind(window);
 const DATE_ORIGIN = nDate.now();
 
 // ---------------------------------------------------------------- clock
@@ -206,6 +207,16 @@ const embeds = globalThis.TapewormEmbeds.createController({
   nSetTimeout,
   nClearTimeout,
   addMessageListener: nAddEventListener,
+  // synthetic provider events (Vimeo timeupdate) ride the real dispatcher with
+  // the player's origin and the iframe as source, so a page SDK's message
+  // listener treats them exactly like the player's own broadcasts
+  dispatchMessage: (iframe, json) => {
+    try {
+      let origin = '*';
+      try { origin = new URL(iframe.src).origin; } catch (e) {}
+      nDispatchEvent(new MessageEvent('message', { data: json, origin, source: iframe.contentWindow }));
+    } catch (e) {}
+  },
   nearViewport,
 });
 

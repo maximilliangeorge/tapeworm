@@ -120,11 +120,69 @@ const VIMEO = {
       post({ method: 'setCurrentTime', value: target });
       return p;
     };
+    /**
+     * Per-frame `timeupdate` for the page's own Vimeo SDK. A paused player
+     * only ever reports `seeked`, so page UI driven by
+     * `player.on('timeupdate')` — a custom scrubber, a chapter highlight —
+     * freezes at 0 while the control keeps the embed paused. Re-broadcast the
+     * frame's time as the message the player would post during real playback
+     * (same shape, same origin, sourced from the iframe's window, so the
+     * SDK's provenance checks pass). Values rounded to the millisecond, as
+     * the player rounds its own.
+     *
+     * Past the video's end (seekTarget clamps there), real playback would
+     * have stopped: pin one final timeupdate at the duration, fire `ended`
+     * once, then go quiet the way a really-ended player does. Page
+     * end-of-video UI (replay buttons, end cards) still triggers, while the
+     * iframe itself never ends — so Vimeo's own end screen stays out of the
+     * render.
+     *
+     * Deliberately NOT synthesized, so a future adapter author doesn't
+     * "complete" this into a bug:
+     * - play/playing/pause: the player genuinely is paused. Forging `play`
+     *   buys a cosmetic fix (play buttons showing the playing icon on
+     *   camera) at the cost of real side effects — analytics beacons,
+     *   pause-other-players logic, pause-on-scroll handlers that would fight
+     *   this controller. If a page gates its timeupdate handling on play
+     *   state, make it an opt-in, not a default.
+     * - cuepoint: cue points are registered by the page SDK directly with
+     *   the player and fire only when playback *crosses* them, which paused
+     *   seeks never do. Feasible (getCuePoints, then emit as frame times
+     *   sweep past) but machinery for a rare pattern — build it when a page
+     *   actually needs it.
+     * - everything else (seeked/seeking, progress, bufferstart/bufferend,
+     *   volumechange, durationchange, chapterchange, cuechange, …): the
+     *   paused player still emits these for real around our pause/mute/
+     *   seeks, and subscriptions are the page's own — nothing to fake.
+     */
+    const payload = (seconds) => ({
+      seconds: Math.round(seconds * 1000) / 1000,
+      percent: s.duration > 0 ? Math.round(Math.min(seconds / s.duration, 1) * 1000) / 1000 : 0,
+      duration: s.duration || 0,
+    });
+    s.announce = (tSec) => {
+      if (!s.ready || !env.dispatchMessage) return;
+      const emit = (event, data) => env.dispatchMessage(iframe, JSON.stringify({ event, data }));
+      const past = s.duration > 0 && tSec + 0.5 / env.fps > s.duration - 0.05; // seekTarget's clamp condition
+      if (!past) {
+        s.endedAnnounced = false; // a backwards jump revives the stream, like a real re-seek
+        emit('timeupdate', payload(s.want != null ? s.want : seekTarget(tSec, env.fps, s.duration)));
+        return;
+      }
+      if (s.endedAnnounced) return;
+      s.endedAnnounced = true;
+      emit('timeupdate', payload(s.duration));
+      emit('ended', payload(s.duration));
+    };
     return s;
   },
 };
 
 // ---------------------------------------------------------------- youtube
+// No announce() here: a page's own YT.Player holds its own `listening`
+// registration with the widget, which addresses every registered listener an
+// infoDelivery on each seek — the page SDK's cached currentTime already
+// tracks the control's seeks without help.
 // The widget API only listens when the embed src carries enablejsapi=1, so
 // discovery may rewrite the src (reload is harmless at boot/prewarm, which is
 // when discovery runs). Outbound {event:'listening'} then {event:'command'};
@@ -266,7 +324,12 @@ function createController(env) {
     }
     const waits = [];
     sessions.forEach((s) => { const p = s.seek(tSec); if (p) waits.push(p); });
-    return waits.length ? Promise.all(waits) : Promise.resolve();
+    const settled = waits.length ? Promise.all(waits) : Promise.resolve();
+    // announce after the seeks settle and before the caller paints, so a page
+    // SDK reacting to the synthetic event has its DOM update in the frame
+    return settled.then(() => {
+      sessions.forEach((s) => { if (s.announce) s.announce(tSec); });
+    });
   }
 
   /**

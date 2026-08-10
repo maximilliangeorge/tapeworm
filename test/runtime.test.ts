@@ -41,6 +41,14 @@ function boot(resolved: Resolved, domOver: Record<string, unknown> = {}): Booted
     addEventListener: (type: string, cb: (ev: { data: unknown; source: unknown }) => void) => {
       if (type === 'message') messageListeners.push(cb);
     },
+    MessageEvent: class {
+      type: string;
+      constructor(type: string, init: Record<string, unknown>) { this.type = type; Object.assign(this, init); }
+    },
+    dispatchEvent: (ev: any) => {
+      if (ev.type === 'message') messageListeners.forEach((l) => l(ev));
+      return true;
+    },
     URL,
     setTimeout,
     clearTimeout,
@@ -132,6 +140,34 @@ test('frame() waits on the embed seek and resolves on the provider ack', async (
   const r = b.sr.embedReport()[0];
   assert.equal(r.ready, true);
   assert.equal(r.ok, true);
+});
+
+test('frame() re-broadcasts a vimeo timeupdate that a page-registered SDK listener hears', async () => {
+  const { iframe, sent } = embedIframe('https://player.vimeo.com/video/76979871');
+  const b = boot(cfg(), { querySelectorAll: (sel: string) => (sel === 'iframe' ? [iframe] : []) });
+  b.deliverMessage({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+
+  // a page SDK's message listener, registered on the (un-shadowed) window API
+  const heard: any[] = [];
+  b.window.addEventListener('message', (ev: any) => {
+    try {
+      const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+      if (d && d.event === 'timeupdate') heard.push({ ev, d });
+    } catch (e) {}
+  });
+
+  b.sr.beginCapture(false);
+  sent.length = 0;
+  const p = b.sr.frame(0, 2, 0);
+  const seekMsg = sent.find((m) => m.method === 'setCurrentTime');
+  b.deliverMessage({ event: 'seeked', data: { seconds: seekMsg.value } }, iframe.contentWindow);
+  await b.settle(p);
+
+  assert.equal(heard.length, 1, 'one timeupdate per frame');
+  assert.equal(heard[0].ev.origin, 'https://player.vimeo.com', 'passes the SDK origin check');
+  assert.equal(heard[0].ev.source, iframe.contentWindow, 'passes the SDK source check');
+  assert.equal(heard[0].d.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
+  assert.equal(heard[0].d.data.duration, 30);
 });
 
 test('embeds: "ignore" tracks nothing and frame() ignores the iframe', async () => {

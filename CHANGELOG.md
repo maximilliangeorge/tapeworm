@@ -20,6 +20,20 @@ and the project uses [Semantic Versioning](https://semver.org/).
   free-run as before. YouTube embeds get `enablejsapi=1` added to their src at
   discovery.
 
+- **Vimeo SDK `timeupdate` events keep flowing while an embed is driven.** A
+  paused Vimeo player never emits the `timeupdate` stream a playing one does,
+  so page UI wired to `player.on('timeupdate', …)` (custom scrubbers, chapter
+  highlights) froze at 0 under embed control. In sync mode tapeworm now
+  re-broadcasts each frame's timestamp as the player's own `timeupdate`
+  message — correct origin and source, so the SDK's checks pass — and the UI
+  tracks the render timeline. Past the embed's duration, tapeworm fires the
+  SDK's `ended` once and then goes quiet, as real playback would, so
+  end-of-video page UI still triggers while the iframe never shows Vimeo's
+  own end screen. `play`/`pause` state and `cuepoint` are deliberately not
+  faked (rationale in `src/embeds-core.js`). YouTube pages need no
+  equivalent: the widget already updates every registered page listener on
+  each seek.
+
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
   site's saves listed first — and loads or deletes past ones. The working
