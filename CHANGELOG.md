@@ -9,6 +9,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Page-commanded pauses on Vimeo embeds are honored.** In sync mode, when
+  the page's own code calls `player.pause()` during the render — a scripted
+  click on a pause button, a pause-on-scroll or visibility handler — the
+  embed now freezes on the frame it stopped at instead of being overridden by
+  the embed control. A single synthetic `pause` event flips the page's UI
+  (the already-paused player emits none for a no-op pause), the `timeupdate`
+  stream goes quiet, and a later `player.play()` resumes from the paused-at
+  time; a scrub while paused moves the resume point. Detected by counting
+  tapeworm's own pause commands against the player's method acks — an
+  unmatched pause ack is the page's. Vimeo only: YouTube's widget protocol
+  has no per-command acks, so page pauses there stay invisible.
+
 - **Cursor smoothing (opt-in).** A `record` step now takes
   `"smoothing": true` or `{ "mode": "denoise", "strength": 0..1 }`: the
   recorded pointer path is resolved through a zero-phase Gaussian kernel, so

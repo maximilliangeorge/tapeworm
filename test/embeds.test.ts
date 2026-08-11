@@ -358,6 +358,98 @@ test('vimeo: freeze mode announces no play — nothing is pretending to advance'
   assert.equal(b.announced.length, 0);
 });
 
+// A page-commanded pause is visible only as an unmatched method ack: the
+// player acks every command, tapeworm's own pauses consume one ack each, and
+// what's left over is the page SDK's player.pause(). These tests drive that
+// accounting message by message.
+
+test('vimeo: a page-commanded pause freezes the embed, announces one synthetic pause, and resumes where it stopped', async () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow); // ready → tapeworm's pause #1
+
+  const step = async (tSec: number) => {
+    const wait = b.controller.sync(tSec);
+    const seekMsg = sent.filter((p) => p.msg.method === 'setCurrentTime').pop();
+    if (seekMsg) b.deliver({ event: 'seeked', data: { seconds: seekMsg.msg.value } }, iframe.contentWindow);
+    await wait;
+  };
+
+  await step(1); // pause #2, alongside the seek
+  // the player acks both of tapeworm's own pauses: consumed, still driving
+  b.deliver({ method: 'pause' }, iframe.contentWindow);
+  b.deliver({ method: 'pause' }, iframe.contentWindow);
+  sent.length = 0;
+  await step(2); // pause #3
+  assert.ok(sent.some((p) => p.msg.method === 'setCurrentTime'), 'own acks are consumed, not mistaken for the page');
+
+  b.deliver({ method: 'pause' }, iframe.contentWindow); // acks pause #3
+  b.deliver({ method: 'pause' }, iframe.contentWindow); // unmatched: the page called pause()
+  sent.length = 0;
+  const before = b.announced.length;
+  await b.controller.sync(3);
+  assert.ok(!sent.some((p) => p.msg.method === 'setCurrentTime'), 'no seek while page-paused');
+  assert.deepEqual(
+    b.announced.slice(before).map((a) => a.msg.event),
+    ['pause'],
+    'one synthetic pause — the really-already-paused player emits no event for the page\'s no-op pause',
+  );
+  const frozeAt = 2 + 0.5 / 60;
+  assert.equal(b.announced[before].msg.data.seconds, Math.round(frozeAt * 1000) / 1000, 'pinned at the time it stopped on');
+  await b.controller.sync(4);
+  assert.equal(b.announced.length, before + 1, 'then quiet — a paused player announces nothing');
+
+  // the page hits play: tapeworm never posts play, so a play ack is always the page's
+  b.deliver({ method: 'play' }, iframe.contentWindow);
+  sent.length = 0;
+  const wait = b.controller.sync(10); // most of the pause happened off-camera between frames
+  const seekMsg = sent.find((p) => p.msg.method === 'setCurrentTime');
+  assert.ok(seekMsg, 'driving again');
+  assert.ok(Math.abs(seekMsg!.msg.value - (frozeAt + 0.5 / 60)) < 1e-9, 'resumes from the paused-at time, not the render clock');
+  b.deliver({ event: 'seeked', data: { seconds: seekMsg!.msg.value } }, iframe.contentWindow);
+  await wait;
+  assert.deepEqual(b.announced.slice(-2).map((a) => a.msg.event), ['play', 'timeupdate'], 'the resume restates play');
+});
+
+test('vimeo: a page scrub while paused moves the resume point — even forward past the render clock', async () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  const wait0 = b.controller.sync(1);
+  const first = sent.find((p) => p.msg.method === 'setCurrentTime')!;
+  b.deliver({ event: 'seeked', data: { seconds: first.msg.value } }, iframe.contentWindow);
+  await wait0;
+
+  b.deliver({ method: 'pause' }, iframe.contentWindow); // acks the ready pause
+  b.deliver({ method: 'pause' }, iframe.contentWindow); // acks the seek's pause
+  b.deliver({ method: 'pause' }, iframe.contentWindow); // the page's own pause()
+  // the page's scrubber seeks the paused player — a real seeked the page's flow produced
+  b.deliver({ event: 'seeked', data: { seconds: 20 } }, iframe.contentWindow);
+  b.deliver({ method: 'play' }, iframe.contentWindow);
+
+  sent.length = 0;
+  const wait = b.controller.sync(5);
+  const seekMsg = sent.find((p) => p.msg.method === 'setCurrentTime');
+  assert.ok(seekMsg, 'driving again');
+  assert.ok(Math.abs(seekMsg!.msg.value - (20 + 0.5 / 60)) < 1e-9, 'continues from the scrubbed time');
+  b.deliver({ event: 'seeked', data: { seconds: seekMsg!.msg.value } }, iframe.contentWindow);
+  await wait;
+});
+
+test('vimeo: a page pause landing before the handshake is not misattributed to the ready-flip pause', async () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  // the page paused while tapeworm was still knocking: its ack is the first message
+  b.deliver({ method: 'pause' }, iframe.contentWindow);
+  assert.equal(b.controller.report()[0].ready, true, 'any message still readies the session');
+  sent.length = 0;
+  await b.controller.sync(1);
+  assert.ok(!sent.some((p) => p.msg.method === 'setCurrentTime'), 'held at its start until the page plays');
+});
+
 // ---------------------------------------------------------------- youtube
 
 test('youtube: src gains enablejsapi=1 (and origin on http(s) pages), preserving params', () => {

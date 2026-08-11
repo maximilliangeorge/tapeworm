@@ -89,13 +89,30 @@ function seekTarget(tSec, fps, duration) {
 // player.vimeo.com speaks JSON strings: outbound {method, value}, inbound
 // method acks {method, value} and subscribed events {event, data}. The API is
 // live on every embed by default — no src rewrite needed.
+//
+// The method acks are also how the page's own intent becomes visible here.
+// The player acks every method it's sent (that's what resolves the page
+// SDK's player.pause() promise — even on an already-paused player), acks
+// carry no sender, and postMessage is FIFO per window pair. So the session
+// counts the pause commands this controller posts and consumes one ack for
+// each; an unmatched pause ack means THE PAGE asked, and that ask is honored:
+// the embed holds the frame it stopped on until the page says play. The
+// resulting frames depend on *when* the pause landed, not just the frame
+// index — path-dependence sync embeds already accept by forcing jobs=1.
 const VIMEO = {
   name: 'vimeo',
   matches: (src) => /^https?:\/\/player\.vimeo\.com\/video\//.test(src),
   prepareSrc: null,
   createSession(iframe, post, env) {
     const slot = pendingSlot(env);
-    const s = { provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null, birth: null, playAnnounced: false };
+    const s = {
+      provider: 'vimeo', ready: false, duration: null, currentTime: 0, want: null, birth: null, playAnnounced: false,
+      // page-pause state: pauseAt is the media time the page stopped on,
+      // skew is how much of the timeline was spent paused (media = local − skew)
+      pagePaused: false, pauseAt: null, skew: 0, resumePending: false, pauseAnnounced: false,
+    };
+    let ownPauses = 0;
+    const pauseCmd = () => { ownPauses++; post({ method: 'pause' }); };
     let tries = 0;
     // Ready and duration are separate goals: readiness flips on ANY message
     // out of the player window — which on a page using the Vimeo SDK is
@@ -118,12 +135,34 @@ const VIMEO = {
       env.nSetTimeout(knock, KNOCK_INTERVAL);
     };
     knock();
-    s.pause = () => post({ method: 'pause' });
+    s.pause = () => pauseCmd();
     s.onMessage = (data) => {
+      // Ack accounting (see the adapter comment above). Checked before the
+      // ready flip so a page pause that lands as the very first message isn't
+      // misattributed to the pause the flip is about to post. A lost ack
+      // degrades gracefully: the counter stays high and a later page pause
+      // goes unnoticed — best-effort, never a false freeze.
+      if (data.method === 'pause') {
+        if (ownPauses > 0) ownPauses--;
+        else if (!s.pagePaused) {
+          s.pagePaused = true;
+          s.pauseAt = s.want != null ? s.want : s.currentTime;
+          s.pauseAnnounced = false;
+          slot.settle(); // a video that just stopped shouldn't hold the frame open for its seek ack
+        }
+      }
+      // This controller never posts play, so a play ack is always the page's.
+      // Real playback does start in the iframe for a moment — the autoplay
+      // defense below re-pauses it when the play event lands — and the
+      // controller resumes driving by seeks from where the page left off.
+      if (data.method === 'play' && s.pagePaused) {
+        s.pagePaused = false;
+        s.resumePending = true;
+      }
       if (!s.ready) {
         // any answer from this window means the player API is live
         s.ready = true;
-        post({ method: 'pause' });
+        pauseCmd();
         post({ method: 'setVolume', value: 0 });
       }
       if (data.method === 'getDuration' && typeof data.value === 'number') s.duration = data.value;
@@ -133,7 +172,7 @@ const VIMEO = {
       if (data.data && typeof data.data.duration === 'number' && data.data.duration > 0) {
         s.duration = data.data.duration;
       }
-      if (data.event === 'play') post({ method: 'pause' }); // autoplay defense: the iframe runs on the real clock
+      if (data.event === 'play') pauseCmd(); // autoplay defense: the iframe runs on the real clock
       // that pause lands as a real `pause` the page hears too, undoing our
       // synthetic `play` — re-arm so the next announce restates it
       if (data.event === 'pause') s.playAnnounced = false;
@@ -142,15 +181,28 @@ const VIMEO = {
         : data.method === 'setCurrentTime' && typeof data.value === 'number' ? data.value : null;
       if (sec != null) {
         s.currentTime = sec;
+        // the page scrubbed while paused (its own pause+setCurrentTime flow):
+        // the resume point moves with it — FIFO means our own seek acks all
+        // landed before the page pause was detected, so this seek is the page's
+        if (s.pagePaused) s.pauseAt = sec;
         slot.ackTime(sec);
       }
     };
     s.seek = (tSec) => {
       if (!s.ready) return null;
-      const target = seekTarget(tSec, env.fps, s.duration);
+      if (s.pagePaused) return null; // the page said stop: hold the frame it stopped on
+      if (s.resumePending) {
+        // the timeline spent between pause and play is subtracted from the
+        // embed's clock from here on, so playback continues from pauseAt —
+        // a scrub while paused may make the skew negative (a forward jump)
+        s.resumePending = false;
+        s.skew = tSec - (s.pauseAt || 0);
+        s.pauseAt = null;
+      }
+      const target = seekTarget(tSec - s.skew, env.fps, s.duration);
       s.want = target;
       const p = slot.arm(iframe, target);
-      post({ method: 'pause' });
+      pauseCmd();
       post({ method: 'setCurrentTime', value: target });
       return p;
     };
@@ -176,14 +228,17 @@ const VIMEO = {
      * button sitting on the wrong icon while the video visibly advances behind
      * it. A wrong control on every frame is a wrong recording. The cost is
      * real and accepted: a page's play handler runs during the render, so
-     * analytics beacons fire, pause-other-players logic runs, and
-     * pause-on-scroll handlers may fight this controller. A page that can't
-     * take that wants mode 'freeze' or 'ignore'.
+     * analytics beacons fire and pause-other-players logic runs. A page that
+     * can't take that wants mode 'freeze' or 'ignore'. A page that *pauses*
+     * in response — pause-on-scroll, pause-when-hidden — is not fought,
+     * though: its pause command is detected through the ack accounting in
+     * onMessage and honored, freezing the embed until the page plays again.
      *
      * Deliberately NOT synthesized, so a future adapter author doesn't
      * "complete" this into a bug:
-     * - pause: nothing needs it. The page hears the player's real pauses, and
-     *   a synthetic one would only undo the `play` above.
+     * - pause, except the page-commanded case below: the page hears the
+     *   player's real pauses, and an unprompted synthetic one would only undo
+     *   the `play` above.
      * - ended: state-shaped, and empirically hazardous — pages close or hide
      *   their player UI when the video finishes, so a forged `ended` blanks
      *   the embed for the rest of the render (this happened on a real site;
@@ -213,10 +268,22 @@ const VIMEO = {
         try { env.dispatchMessage(iframe, JSON.stringify({ event, data })); }
         finally { announcing = false; }
       };
-      const past = s.duration > 0 && tSec + 0.5 / env.fps > s.duration - 0.05; // seekTarget's clamp condition
+      if (s.pagePaused) {
+        // The pause the page asked for really landed — on an already-paused
+        // player, which transitions nothing and so broadcasts nothing. State
+        // the transition once, or the UI the page paused *for* never flips.
+        if (!s.pauseAnnounced) {
+          s.pauseAnnounced = true;
+          s.playAnnounced = false; // the eventual resume restates play
+          emit('pause', payload(s.pauseAt || 0));
+        }
+        return; // a paused player is quiet: no timeupdates until the page plays
+      }
+      const media = tSec - s.skew;
+      const past = s.duration > 0 && media + 0.5 / env.fps > s.duration - 0.05; // seekTarget's clamp condition
       if (!past) {
         s.endAnnounced = false;
-        const at = payload(s.want != null ? s.want : seekTarget(tSec, env.fps, s.duration));
+        const at = payload(s.want != null ? s.want : seekTarget(media, env.fps, s.duration));
         // `play` before `timeupdate`: a page that gates its scrubber on play
         // state has to be playing before the time it renders arrives
         if (!s.playAnnounced) {
@@ -244,6 +311,10 @@ const VIMEO = {
 // when discovery runs). Outbound {event:'listening'} then {event:'command'};
 // inbound is a stream of {event:'infoDelivery', info:{...}}. There is NO seek
 // ack — a pending seek resolves when a delivery reports a close-enough time.
+// Page-commanded pauses (honored on Vimeo via method-ack accounting) cannot
+// be detected here: the widget has no per-command acks, only broadcast
+// infoDelivery, and a page pauseVideo on the already-paused player changes no
+// playerState — it's invisible from the top frame.
 let ytNextId = 1;
 const YOUTUBE = {
   name: 'youtube',
