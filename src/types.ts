@@ -208,6 +208,12 @@ export type Config = {
      * with its own hotspot; `size` rescales the whole set, stated as the
      * arrow's rendered width in CSS px (default 28, the natural size).
      *
+     * `{ dot: true }` draws the circular marker the extension preview uses —
+     * a dark disc with a white ring, centred on the point, turning blue while
+     * the button is down. Reads as a fingertip rather than a mouse, which
+     * suits touch-style demos. `size` is its diameter in CSS px (default 18,
+     * the preview's).
+     *
      * `{ image: … }` replaces the built-in arrow with one sprite of your own:
      * a local image file (png/svg/gif/jpeg/webp, embedded into the render at
      * config time), or an https:// or data: URL. `tip` is the [x, y] px
@@ -218,13 +224,14 @@ export type Config = {
      * `fade` is how many seconds the sprite fades in when it appears and out
      * before it disappears, instead of popping. Default 0 (no fade). It
      * applies in every mode: alone (`{ fade: 0.3 }` fades the built-in
-     * arrow), with `auto`, or with `image`. `tip` describes a replacement
+     * arrow), with `auto`, `dot`, or `image`. `tip` describes a replacement
      * sprite and requires `image`.
      */
     cursor?:
       | boolean
-      | { auto: true; image?: never; tip?: never; size?: number; fade?: number }
-      | { image?: string; auto?: never; tip?: [number, number]; size?: number; fade?: number };
+      | { auto: true; dot?: never; image?: never; tip?: never; size?: number; fade?: number }
+      | { dot: true; auto?: never; image?: never; tip?: never; size?: number; fade?: number }
+      | { image?: string; auto?: never; dot?: never; tip?: [number, number]; size?: number; fade?: number };
     video?: VideoMode;
     /**
      * Same modes, applied to provider embeds (YouTube/Vimeo iframes), driven
@@ -316,16 +323,18 @@ export type Resolved = {
      * false = never drawn. `auto` = the macOS set: sprite name → embedded
      * data: URI, rendered width, and hotspot, all pre-scaled at config time;
      * the page runtime picks per frame from the CSS cursor under the pointer.
-     * Otherwise one fixed sprite: the built-in arrow when `image` is null,
-     * else an image URL (local files became data: URIs at config time).
-     * tipX/tipY are the px inside the rendered sprite where the pointer tip
-     * sits; size is the rendered width in CSS px. fade is the
-     * appear/disappear fade in seconds, 0 = pop; it applies in both modes.
+     * `dot` = the preview-style touch disc, tip pre-centred (tipX/tipY =
+     * size/2). Otherwise one fixed sprite: the built-in arrow when `image`
+     * is null, else an image URL (local files became data: URIs at config
+     * time). tipX/tipY are the px inside the rendered sprite where the
+     * pointer tip sits; size is the rendered width in CSS px. fade is the
+     * appear/disappear fade in seconds, 0 = pop; it applies in every mode.
      */
     cursor:
       | false
-      | { image: string | null; auto?: never; tipX: number; tipY: number; size: number; fade: number }
-      | { auto: Record<string, { url: string; tipX: number; tipY: number; size: number }>; image?: never; fade: number };
+      | { image: string | null; auto?: never; dot?: never; tipX: number; tipY: number; size: number; fade: number }
+      | { dot: true; auto?: never; image?: never; tipX: number; tipY: number; size: number; fade: number }
+      | { auto: Record<string, { url: string; tipX: number; tipY: number; size: number }>; image?: never; dot?: never; fade: number };
     video: VideoMode;
     embeds: VideoMode;
     css: string;

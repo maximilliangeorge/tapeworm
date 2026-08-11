@@ -362,10 +362,25 @@ test('page.cursor auto: the macOS set embeds with per-cursor sizes and hotspots'
   const faded = cur({ auto: true, fade: 0.3 });
   assert.equal(faded && typeof faded === 'object' && 'fade' in faded ? faded.fade : undefined, 0.3);
 
-  assert.throws(() => cur({ auto: true, image: 'x.png' }), /either "auto" or "image"/);
+  assert.throws(() => cur({ auto: true, image: 'x.png' }), /only one of "auto", "dot", "image"/);
   assert.throws(() => cur({ auto: true, tip: [1, 2] }), /tip does not apply to auto/);
   assert.throws(() => cur({ auto: 'yes' }), /"page\.cursor" must be/);
   assert.throws(() => cur({ auto: true, size: 0 }), /size must be/);
+});
+
+test('page.cursor dot: the preview-style touch disc, centred, sized and fadeable', () => {
+  const cur = (cursor: unknown) =>
+    resolveConfig({ ...BASE, page: { cursor } } as unknown as Config).page.cursor;
+
+  // tip is always the centre, so the disc sits on the recorded point
+  assert.deepEqual(cur({ dot: true }), { dot: true, tipX: 9, tipY: 9, size: 18, fade: 0 });
+  assert.deepEqual(cur({ dot: true, size: 30, fade: 0.2 }), { dot: true, tipX: 15, tipY: 15, size: 30, fade: 0.2 });
+
+  assert.throws(() => cur({ dot: true, tip: [1, 2] }), /tip does not apply to the dot/);
+  assert.throws(() => cur({ dot: true, image: 'x.png' }), /only one of "auto", "dot", "image"/);
+  assert.throws(() => cur({ dot: true, auto: true }), /only one of "auto", "dot", "image"/);
+  assert.throws(() => cur({ dot: 'yes' }), /"page\.cursor" must be/);
+  assert.throws(() => cur({ dot: true, size: 0 }), /size must be/);
 });
 
 test('page.cursor.fade: opt-in seconds, usable with or without a replacement image', () => {

@@ -424,6 +424,33 @@ test('auto cursor: the sprite follows the CSS cursor under the pointer, gestures
   assert.equal(shown()[0].src, sprites.cursor.url, 'keywords outside the set fall back to the arrow');
 });
 
+test('dot cursor: a centred disc that turns blue while pressed', () => {
+  const appended: any[] = [];
+  const booted = boot(cfg({ page: { cursor: { dot: true } } }), {});
+  const { window, sr } = booted;
+  window.document.createElement = () => ({
+    className: '', innerHTML: '', style: {}, children: [] as any[],
+    appendChild(child: any) { this.children.push(child); },
+  });
+  window.document.documentElement.appendChild = (el: any) => appended.push(el);
+
+  sr.cursor(100, 50, false);
+  const root = appended[0];
+  const disc = root.children[0];
+  assert.match(disc.style.cssText, /border-radius:50%/);
+  assert.match(disc.style.cssText, /width:18px/);
+  assert.match(root.style.cssText, /transform-origin:9px 9px/, 'press shrink pivots on the centre');
+  assert.match(root.style.transform, /translate\(91px,41px\)/, 'the centre sits on the point');
+  assert.equal(disc.style.background, 'rgba(22,24,29,0.85)');
+
+  sr.cursor(100, 50, true);
+  assert.equal(disc.style.background, 'rgba(64,156,255,0.95)', 'pressed = blue, like the preview');
+  assert.match(root.style.transform, /scale\(0\.88\)/);
+
+  sr.cursor(100, 50, false);
+  assert.equal(disc.style.background, 'rgba(22,24,29,0.85)', 'release restores the idle colour');
+});
+
 test('page.cursor false: input still flows but nothing is ever drawn', async () => {
   const { sr, settle, appended } = bootWithCursorDom({ page: { cursor: false } });
   sr.beginCapture(false);

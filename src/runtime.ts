@@ -368,17 +368,26 @@ function hideOverlays() {
 let cursorEl = null;
 let cursorImgs = null;   // auto mode: sprite name -> its (pre-created) <img>
 let cursorShown = '';    // auto mode: which sprite is currently displayed
+let cursorDot = null;    // dot mode: the disc, recoloured while pressed
 
 function ensureCursor() {
   if (cursorEl) return cursorEl;
-  const cur = OPT.cursor; // false, { auto: {name: {url, tipX, tipY, size}} }, or one { image, tipX, tipY, size }
+  const cur = OPT.cursor; // false, { auto: {name: {url, tipX, tipY, size}} }, { dot }, or one { image, tipX, tipY, size }
   cursorEl = document.createElement('div');
   cursorEl.className = '__tw-cursor';
   cursorEl.style.cssText =
     'position:fixed;left:0;top:0;z-index:2147483647;' +
     'pointer-events:none;transform:translate(-9999px,-9999px);will-change:transform;' +
     (cur.auto ? '' : 'transform-origin:' + cur.tipX + 'px ' + cur.tipY + 'px;');
-  if (cur.auto) {
+  if (cur.dot) {
+    // The extension preview's touch disc, ring scaled with the diameter.
+    cursorDot = document.createElement('div');
+    cursorDot.style.cssText =
+      'width:' + cur.size + 'px;height:' + cur.size + 'px;border-radius:50%;box-sizing:border-box;' +
+      'background:rgba(22,24,29,0.85);border:' + cur.size / 9 + 'px solid #fff;' +
+      'box-shadow:0 1px 4px rgba(0,0,0,0.4);';
+    cursorEl.appendChild(cursorDot);
+  } else if (cur.auto) {
     // Every sprite exists (hidden) from the start, so switching mid-gesture is
     // a display toggle between already-decoded images, never a fresh decode.
     cursorImgs = {};
@@ -461,6 +470,10 @@ function drawCursor(c) {
   } else {
     tipX = OPT.cursor.tipX;
     tipY = OPT.cursor.tipY;
+  }
+  if (cursorDot) {
+    // same press affordance as the preview: the disc turns blue
+    cursorDot.style.background = c.down ? 'rgba(64,156,255,0.95)' : 'rgba(22,24,29,0.85)';
   }
   el.style.transform =
     'translate(' + (c.x - tipX) + 'px,' + (c.y - tipY) + 'px)' +

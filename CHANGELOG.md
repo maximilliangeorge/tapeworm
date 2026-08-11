@@ -22,6 +22,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
   From the CLI: `--cursor auto` and the new `--cursor-size <px>` (which also
   sizes a custom `image` sprite). Composes with `page.cursor.fade`.
 
+- **Touch-dot cursor.** `page.cursor: { "dot": true, "size?": px }` /
+  `--cursor dot` draws the circular marker the extension preview uses — a
+  dark disc with a white ring, centred on the recorded point, blue while the
+  button is down. Reads as a fingertip rather than a mouse, for touch-style
+  demos. `size` is the diameter (default 18, the preview's); composes with
+  `fade` and `--cursor-size`.
+
 - **Cursor fade.** Opt-in: the drawn gesture cursor can fade in where it
   appears and out where it disappears instead of popping — `page.cursor.fade`
   (seconds; works with or without a replacement `image`), `--cursor-fade` on

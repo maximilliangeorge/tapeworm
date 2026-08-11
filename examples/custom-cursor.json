@@ -30,11 +30,14 @@
     // config time — a wrong path fails before Chrome launches), or an
     // https:// or data: URL. For instance:
     //   "cursor": { "auto": true }
+    //   "cursor": { "dot": true }
     //   "cursor": { "image": "hand.png", "tip": [14, 2], "size": 40 }
     //   "auto" — the macOS cursors from assets/cursors/, switching per frame
     //            with the CSS cursor under the pointer (arrow, pointing hand
     //            over links, open/closed hand across a grab, zoom, ...);
     //            "size" rescales the set, stated as the arrow's width
+    //   "dot"  — the preview-style touch disc, centred on the point and blue
+    //            while pressed; "size" is its diameter (default 18)
     //   "tip"  — [x, y] px inside the rendered sprite that lands on the recorded
     //            point (default [0, 0], the top-left corner)
     //   "size" — rendered width in CSS px, height keeps the aspect (default 32)

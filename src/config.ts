@@ -253,7 +253,7 @@ export const AUTO_CURSORS: Record<string, { w: number; tip: [number, number] }> 
  * not render an invisible cursor minutes in.
  */
 function resolveCursor(
-  c: boolean | { auto?: unknown; image?: unknown; tip?: unknown; size?: unknown; fade?: unknown } | undefined,
+  c: boolean | { auto?: unknown; dot?: unknown; image?: unknown; tip?: unknown; size?: unknown; fade?: unknown } | undefined,
   pageUrl: string,
 ): Resolved['page']['cursor'] {
   if (c === false) return false;
@@ -261,17 +261,31 @@ function resolveCursor(
   const shapeError = () =>
     new Error(
       '"page.cursor" must be true, false, { auto: true, size?: px, fade?: seconds } (the macOS set, ' +
-        'picked per frame from the CSS cursor under the pointer), or ' +
+        'picked per frame from the CSS cursor under the pointer), { dot: true, size?: px, fade?: seconds } ' +
+        '(the preview-style touch disc), or ' +
         '{ image?: "path or url", tip?: [x, y], size?: px, fade?: seconds } (tip/size require image)',
     );
   if (typeof c !== 'object' || c === null) throw shapeError();
+  if ([c.auto, c.dot, c.image].filter((m) => m !== undefined).length > 1) {
+    throw new Error('page.cursor: give only one of "auto", "dot", "image"');
+  }
   const fade = c.fade ?? 0;
   if (typeof fade !== 'number' || !Number.isFinite(fade) || fade < 0) {
     throw new Error('page.cursor.fade must be seconds >= 0');
   }
+  if (c.dot !== undefined) {
+    if (c.dot !== true) throw shapeError();
+    if (c.tip !== undefined) {
+      throw new Error('page.cursor.tip does not apply to the dot — it is centred on the point');
+    }
+    const size = c.size ?? 18; // the preview disc's rendered diameter
+    if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) {
+      throw new Error('page.cursor.size must be the rendered width in CSS px > 0');
+    }
+    return { dot: true, tipX: size / 2, tipY: size / 2, size, fade };
+  }
   if (c.auto !== undefined) {
     if (c.auto !== true) throw shapeError();
-    if (c.image !== undefined) throw new Error('page.cursor: give either "auto" or "image", not both');
     if (c.tip !== undefined) {
       throw new Error('page.cursor.tip does not apply to auto mode — each macOS cursor carries its own hotspot');
     }

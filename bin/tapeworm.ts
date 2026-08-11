@@ -46,13 +46,16 @@ OPTIONS
                          bundled macOS set, switching per frame with the CSS
                          cursor under the pointer (arrow, pointing hand over
                          links, open/closed hand across a grab, zoom, ...).
-                         Or one sprite of your own: an image file or an
-                         https/data: URL, pointer tip at its top-left corner.
-                         "none" hides it.
+                         "dot" draws the preview-style touch disc, centred on
+                         the point and blue while pressed — reads as a
+                         fingertip for touch-style demos. Or one sprite of
+                         your own: an image file or an https/data: URL,
+                         pointer tip at its top-left corner. "none" hides it.
       --cursor-size <px> rendered cursor width in CSS px. For auto, the
                          arrow's width — the other cursors keep macOS's
-                         relative proportions. Config page.cursor also sets
-                         an image sprite's tip point.
+                         relative proportions. For dot, its diameter.
+                         Config page.cursor also sets an image sprite's
+                         tip point.
       --cursor-fade <s>  fade the drawn cursor in/out over this many seconds
                          where it appears and disappears, default 0 (no fade)
       --prewarm <mode>   full | cache | none, default full
@@ -216,14 +219,17 @@ async function main(): Promise<void> {
   if (cursor) {
     config.page = {
       ...config.page,
-      cursor: cursor === 'none' ? false : cursor === 'auto' ? { auto: true } : { image: cursor },
+      cursor: cursor === 'none' ? false
+        : cursor === 'auto' ? { auto: true }
+        : cursor === 'dot' ? { dot: true }
+        : { image: cursor },
     };
   }
   const cursorSize = num(flags, 'cursor-size');
   if (cursorSize !== undefined) {
     const cur = config.page?.cursor;
     if (typeof cur !== 'object' || cur === null) {
-      fail('--cursor-size needs a sprite to size — pass --cursor <auto or image>, or set page.cursor in the config');
+      fail('--cursor-size needs a sprite to size — pass --cursor <auto, dot, or image>, or set page.cursor in the config');
     }
     config.page = { ...config.page, cursor: { ...cur, size: cursorSize } };
   }
