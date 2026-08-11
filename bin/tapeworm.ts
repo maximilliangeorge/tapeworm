@@ -39,6 +39,8 @@ OPTIONS
       --auto             discover sections instead of using the config timeline
       --sections <n>     how many sections --auto should visit, default 6
       --video <mode>     sync | freeze | ignore, default sync
+      --embeds <mode>    sync | freeze | ignore for YouTube/Vimeo iframes,
+                         default: follows --video
       --clock <mode>     virtual | real, default virtual
       --cursor <image>   replace the drawn gesture cursor with an image file or
                          https/data: URL (pointer tip at its top-left corner);
@@ -74,7 +76,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const flags: Flags = {};
   const takesValue = new Set([
     'out', 'o', 'fps', 'width', 'height', 'dpr', 'crf', 'jobs', 'j',
-    'sections', 'video', 'clock', 'cursor', 'cursor-fade', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
+    'sections', 'video', 'embeds', 'clock', 'cursor', 'cursor-fade', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -191,6 +193,11 @@ async function main(): Promise<void> {
   if (videoMode) {
     if (!['sync', 'freeze', 'ignore'].includes(videoMode)) fail(`--video must be sync, freeze or ignore`);
     config.page = { ...config.page, video: videoMode as VideoMode };
+  }
+  const embedsMode = str(flags, 'embeds');
+  if (embedsMode) {
+    if (!['sync', 'freeze', 'ignore'].includes(embedsMode)) fail(`--embeds must be sync, freeze or ignore`);
+    config.page = { ...config.page, embeds: embedsMode as VideoMode };
   }
   const clock = str(flags, 'clock');
   if (clock) {

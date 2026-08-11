@@ -31,19 +31,29 @@ export function sharedCoreSource(): string {
     .join('\n');
 }
 
+/**
+ * Provider-embed control, loaded the same verbatim way as the shared core but
+ * deliberately NOT in src/shared/: sync-shared would ship it to the extension,
+ * and its YouTube src rewrite must never fire outside a render.
+ */
+export function embedsCoreSource(): string {
+  return readFileSync(new URL('./embeds-core.js', import.meta.url), 'utf8');
+}
+
 export function runtimeSource(cfg: Resolved): string {
   const opts = JSON.stringify({
     fps: cfg.fps,
     clock: cfg.page.clock,
     seekAnimations: cfg.page.seekAnimations,
     video: cfg.page.video,
+    embeds: cfg.page.embeds,
     dismissConsent: cfg.page.dismissConsent,
     hideOverlays: cfg.page.hideOverlays,
     cursor: cfg.page.cursor,
     css: cfg.page.css,
   });
 
-  return sharedCoreSource() + `\n(() => {
+  return sharedCoreSource() + '\n' + embedsCoreSource() + `\n(() => {
 'use strict';
 if (window.__sr) return;
 const OPT = ${opts};
@@ -59,6 +69,8 @@ const nSetTimeout = window.setTimeout.bind(window);
 const nClearTimeout = window.clearTimeout.bind(window);
 const nDate = window.Date;
 const nPerfNow = window.performance.now.bind(window.performance);
+const nAddEventListener = window.addEventListener.bind(window);
+const nDispatchEvent = window.dispatchEvent.bind(window);
 const DATE_ORIGIN = nDate.now();
 
 // ---------------------------------------------------------------- clock
@@ -182,6 +194,31 @@ function syncVideos(tSec) {
   videos.forEach((v) => { const p = seekVideo(v, tSec); if (p) waits.push(p); });
   return waits.length ? Promise.all(waits) : Promise.resolve();
 }
+
+// ---------------------------------------------------------------- embeds
+// Provider iframes (YouTube/Vimeo) live in OOPIFs the runtime never reaches —
+// their clock is real, so anything left playing free-runs against the frame
+// index. The controller drives them via postMessage using OUR natives: the
+// page's addEventListener/setTimeout are virtualised or shadowable, but the
+// embed's player answers on the real clock from the other side.
+const embeds = globalThis.TapewormEmbeds.createController({
+  mode: OPT.embeds,
+  fps: OPT.fps,
+  nSetTimeout,
+  nClearTimeout,
+  addMessageListener: nAddEventListener,
+  // synthetic provider events (Vimeo timeupdate) ride the real dispatcher with
+  // the player's origin and the iframe as source, so a page SDK's message
+  // listener treats them exactly like the player's own broadcasts
+  dispatchMessage: (iframe, json) => {
+    try {
+      let origin = '*';
+      try { origin = new URL(iframe.src).origin; } catch (e) {}
+      nDispatchEvent(new MessageEvent('message', { data: json, origin, source: iframe.contentWindow }));
+    } catch (e) {}
+  },
+  nearViewport,
+});
 
 // ---------------------------------------------------------------- images
 /**
@@ -417,10 +454,13 @@ function boot() {
   injectCSS(HYGIENE, '__sr_hygiene');
   if (OPT.css) injectCSS(OPT.css, '__sr_user_css');
   scanVideos(document);
+  embeds.scan(document);
   eagerize(document);
   const mo = new MutationObserver((records) => {
     for (const rec of records) {
-      for (const n of rec.addedNodes) { scanVideos(n); eagerize(n); }
+      // embeds.scan here is what catches facade embeds (lite-youtube and co
+      // swap a thumbnail for the real iframe long after boot)
+      for (const n of rec.addedNodes) { scanVideos(n); embeds.scan(n); eagerize(n); }
     }
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
@@ -516,8 +556,10 @@ window.__sr = {
                                 // where IntersectionObserver-driven reveals get added
     seekAnimations(vnow);       // ...so seek after the flush, not before
     const videoWait = syncVideos(tSec);
+    const embedWait = embeds.sync(tSec);
     const imgWait = waitForImages(imageBudgetMs == null ? 1500 : imageBudgetMs);
     await videoWait;
+    await embedWait;
     const loaded = await imgWait;
     seekAnimations(vnow);       // late arrivals get their birth stamped here
     if (cursor !== undefined) drawCursor(cursor);
@@ -554,6 +596,20 @@ window.__sr = {
   maxScroll,
   setScroll,
   videoCount: () => videos.size,
+  embedCount: () => embeds.count(),
+  /**
+   * Per-embed health check, videoReport's sibling. Providers answer (or
+   * don't) over postMessage, so "unhealthy" here means a dead handshake or a
+   * seek the player wouldn't honour — both degrade to free-running, reported
+   * before the render rather than discovered after it.
+   */
+  embedReport: () => embeds.report(),
+  /**
+   * Shard-start gate: bounded wait for provider handshakes plus one priming
+   * seek, so a shard's first frame doesn't land on a cold player. Instant
+   * no-op when the page has no provider embeds.
+   */
+  embedsReady: (maxMs, tFirstSec) => embeds.ready(maxMs, tFirstSec),
   /**
    * Per-video health check. The common failure is a server that ignores HTTP Range
    * requests: currentTime assignment silently no-ops and every frame shows the same
@@ -580,6 +636,7 @@ window.__sr = {
       max: maxScroll(),
       docHeight: document.documentElement.scrollHeight,
       videos: videos.size,
+      embeds: embeds.count(),
       animations: document.getAnimations ? document.getAnimations().length : 0,
       fontsReady: document.fonts ? document.fonts.status === 'loaded' : true,
     };

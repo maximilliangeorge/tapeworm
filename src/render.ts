@@ -299,23 +299,54 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   const subs = cfg.page.substitute.length;
   if (subs > 0) notes.push(`substituting ${subs} URL pattern${subs === 1 ? '' : 's'}`);
   if (metrics) {
-    notes.push(`document ${metrics.docHeight}px, ${metrics.videos} video${metrics.videos === 1 ? '' : 's'}, ${metrics.animations} animation${metrics.animations === 1 ? '' : 's'}`);
+    const embedNote = (metrics.embeds ?? 0) > 0 ? `, ${metrics.embeds} embed${metrics.embeds === 1 ? '' : 's'}` : '';
+    notes.push(`document ${metrics.docHeight}px, ${metrics.videos} video${metrics.videos === 1 ? '' : 's'}${embedNote}, ${metrics.animations} animation${metrics.animations === 1 ? '' : 's'}`);
   }
-  // Probe one frame mid-timeline so video problems surface before a long render,
-  // not after it.
-  if (cfg.page.video === 'sync' && (metrics?.videos ?? 0) > 0) {
+  // Probe one frame mid-timeline so video/embed problems surface before a long
+  // render, not after it.
+  const probeVideos = cfg.page.video === 'sync' && (metrics?.videos ?? 0) > 0;
+  const probeEmbeds = cfg.page.embeds === 'sync' && (metrics?.embeds ?? 0) > 0;
+  if (probeVideos || probeEmbeds) {
     try {
       await lead.session.eval(`window.__sr.frame(${track.offsets[0]}, 1, 800)`, true, 20_000);
-      const report = await lead.session.eval<any[]>('window.__sr.videoReport()');
-      for (const v of report ?? []) {
-        if (v.ok) continue;
-        if (v.seekableRanges === 0) {
-          notes.push(`video "${v.src}" reports no seekable range — it may be a live stream, DRM-protected, or still loading. It will show one frozen frame.`);
-        } else {
-          notes.push(
-            `video "${v.src}" would not seek (asked ${Number(v.wanted).toFixed(3)}s, stayed at ${Number(v.currentTime).toFixed(3)}s). ` +
-              `The usual cause is a server that ignores HTTP Range requests. Use --video freeze to accept a still frame.`,
-          );
+      if (probeVideos) {
+        const report = await lead.session.eval<any[]>('window.__sr.videoReport()');
+        for (const v of report ?? []) {
+          if (v.ok) continue;
+          if (v.seekableRanges === 0) {
+            notes.push(`video "${v.src}" reports no seekable range — it may be a live stream, DRM-protected, or still loading. It will show one frozen frame.`);
+          } else {
+            notes.push(
+              `video "${v.src}" would not seek (asked ${Number(v.wanted).toFixed(3)}s, stayed at ${Number(v.currentTime).toFixed(3)}s). ` +
+                `The usual cause is a server that ignores HTTP Range requests. Use --video freeze to accept a still frame.`,
+            );
+          }
+        }
+      }
+      if (probeEmbeds) {
+        const report = await lead.session.eval<any[]>('window.__sr.embedReport()');
+        const timelineSec = total / cfg.fps;
+        for (const e of report ?? []) {
+          // A healthy embed shorter than the timeline is the quietest way for a
+          // render to look broken: seeks clamp at its duration and it holds its
+          // last frame, silently, for the rest of the video. Say so up front.
+          if (e.ready && typeof e.duration === 'number' && e.duration > 0 && e.duration < timelineSec - 0.5) {
+            notes.push(
+              `embed "${e.src}" runs ${e.duration.toFixed(1)}s but the timeline runs ${timelineSec.toFixed(1)}s — ` +
+                `it holds its last frame from there on (provider embeds don't loop).`,
+            );
+          }
+          if (e.ok) continue;
+          if (!e.controllable) {
+            notes.push(`cross-origin iframe "${e.src}" is not a known video provider — it cannot be controlled and will free-run.`);
+          } else if (!e.ready) {
+            notes.push(`embed "${e.src}" never answered the player API handshake — it will free-run during the render. Use --embeds freeze to pause it.`);
+          } else {
+            notes.push(
+              `embed "${e.src}" would not seek (asked ${Number(e.wanted).toFixed(3)}s, reports ${Number(e.currentTime).toFixed(3)}s) — ` +
+                `provider seeking is keyframe-coarse and best-effort.`,
+            );
+          }
         }
       }
     } catch { /* the probe is advisory; never fail the render on it */ }
@@ -338,6 +369,18 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         `this will read as strobing. Lengthen the fast segments, or raise --fps.`,
     );
   }
+  // Provider embeds buffer per worker and seek keyframe-coarse, so a shard
+  // boundary can land inside an embed on a different frame than a continuous
+  // pass would — take the deterministic single worker over the parallelism.
+  let jobs = Math.max(1, Math.min(cfg.jobs, Math.ceil(total / 15)));
+  if (jobs > 1 && cfg.page.embeds === 'sync' && (metrics?.embeds ?? 0) > 0) {
+    notes.push(
+      `${metrics.embeds} provider embed${metrics.embeds === 1 ? '' : 's'} — rendering with a single worker so ` +
+        `provider seeks stay seam-free (--embeds freeze or ignore restores parallelism)`,
+    );
+    jobs = 1;
+  }
+
   progress.onPlan?.(track.plan, track, notes);
 
   // The build pass executed the interactions, so the page is wherever the last
@@ -347,7 +390,6 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
     for (const n of await resetPage(lead.session, cfg)) note(n);
   }
 
-  const jobs = Math.max(1, Math.min(cfg.jobs, Math.ceil(total / 15)));
   mkdirSync(dirname(cfg.outPath) || '.', { recursive: true });
 
   const tmp = join(tmpdir(), `tapeworm-${process.pid}`);
@@ -387,6 +429,11 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
           : createEncoder(segPath, cfg);
         if (!isPng) segments[shard] = segPath;
         await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
+        // Bounded wait for provider-embed handshakes plus one priming seek to
+        // this shard's first frame, so it doesn't land on a cold player.
+        // Instant no-op when the page has no embeds; the caps keep it far
+        // under captureFrame's eval timeout.
+        await worker.session.eval(`window.__sr.embedsReady(4000, ${from / cfg.fps})`, true, 8_000).catch(() => {});
 
         // Scroll offset the pointer is sitting at after an interaction or a
         // recorded frame, or null when it's parked. The pointer stays put
@@ -414,6 +461,8 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
               // soft navigation keeps the document — and must NOT re-arm: the
               // transition's animations are mid-flight on their birth times.
               await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
+              // fresh document = fresh embed handshakes too (no-op without embeds)
+              await worker.session.eval(`window.__sr.embedsReady(2000, ${t})`, true, 4_000).catch(() => {});
             }
           }
 

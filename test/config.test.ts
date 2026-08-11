@@ -20,8 +20,28 @@ test('minimal config gets documented defaults', () => {
   assert.equal(r.prewarm.mode, 'full');
   assert.equal(r.page.clock, 'virtual');
   assert.equal(r.page.video, 'sync');
+  assert.equal(r.page.embeds, 'sync');
   assert.equal(r.page.unlockIntro.enabled, true);
   assert.ok(r.jobs >= 1);
+});
+
+test('page.embeds follows page.video unless set explicitly', () => {
+  assert.equal(resolveConfig({ ...BASE, page: { video: 'freeze' } }).page.embeds, 'freeze');
+  assert.equal(resolveConfig({ ...BASE, page: { video: 'ignore' } }).page.embeds, 'ignore');
+  const split = resolveConfig({ ...BASE, page: { video: 'sync', embeds: 'freeze' } });
+  assert.equal(split.page.video, 'sync');
+  assert.equal(split.page.embeds, 'freeze');
+});
+
+test('page.video and page.embeds reject unknown modes', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { video: 'syncc' as never } }),
+    /page.video must be sync, freeze or ignore/,
+  );
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { embeds: 'pause' as never } }),
+    /page.embeds must be sync, freeze or ignore/,
+  );
 });
 
 test('url is required and must parse', () => {
@@ -201,6 +221,20 @@ test('malformed recordings fail with the index and the defect', () => {
   bad({ buttons: [{ t: 400, action: 'press' }] }, /buttons\[0\] must be/);
   bad({ viewport: undefined }, /needs the "viewport" it was recorded at/);
   bad({ hold: -1 }, /"hold" must be seconds >= 0/);
+});
+
+test('cursor smoothing is validated: booleans and denoise objects pass, anything else fails loudly', () => {
+  for (const smoothing of [true, false, { mode: 'denoise' }, { strength: 0.7 }, { mode: 'denoise', strength: 0 }]) {
+    const r = resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, smoothing } as never] });
+    assert.deepEqual((r.timeline[1] as typeof REC & { smoothing: unknown }).smoothing, smoothing);
+  }
+  const bad = (smoothing: unknown, re: RegExp) =>
+    assert.throws(() => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, smoothing } as never] }), re);
+  bad('denoise', /smoothing must be a boolean or/);
+  bad({ mode: 'glide' }, /unknown "record" smoothing mode "glide" \(this version has: denoise\)/);
+  bad({ strength: 2 }, /strength must be a number from 0 to 1/);
+  bad({ strength: -0.1 }, /strength must be a number from 0 to 1/);
+  bad({ strength: 'high' }, /strength must be a number from 0 to 1/);
 });
 
 test('the start step can pin the url: used when config.url is absent, must agree when both exist', () => {

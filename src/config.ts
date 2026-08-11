@@ -151,6 +151,23 @@ function validateRecord(e: Step & { type: 'record' }, i: number): void {
       prevT = b.t;
     }
   }
+  if (e.smoothing !== undefined && typeof e.smoothing !== 'boolean') {
+    const sm = e.smoothing as { mode?: unknown; strength?: unknown };
+    if (typeof sm !== 'object' || sm === null) {
+      throw new Error(`timeline[${i}]: "record" smoothing must be a boolean or { mode?, strength? }`);
+    }
+    // reject unknown modes so a config authored for a future tapeworm fails
+    // loudly here instead of silently rendering with the wrong look
+    if (sm.mode !== undefined && sm.mode !== 'denoise') {
+      throw new Error(`timeline[${i}]: unknown "record" smoothing mode "${String(sm.mode)}" (this version has: denoise)`);
+    }
+    if (
+      sm.strength !== undefined &&
+      (typeof sm.strength !== 'number' || !Number.isFinite(sm.strength) || sm.strength < 0 || sm.strength > 1)
+    ) {
+      throw new Error(`timeline[${i}]: "record" smoothing strength must be a number from 0 to 1`);
+    }
+  }
   const v = e.viewport as { width?: unknown; height?: unknown } | undefined;
   const isDim = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
   if (!v || !isDim(v.width) || !isDim(v.height)) {
@@ -314,6 +331,16 @@ export function resolveConfig(input: Config): Resolved {
     outPath += codec === 'prores' ? '.mov' : '.mp4';
   }
 
+  const videoModes = ['sync', 'freeze', 'ignore'];
+  const video = input.page?.video ?? 'sync';
+  if (!videoModes.includes(video)) {
+    throw new Error(`page.video must be sync, freeze or ignore (got "${video}")`);
+  }
+  const embeds = input.page?.embeds ?? video;
+  if (!videoModes.includes(embeds)) {
+    throw new Error(`page.embeds must be sync, freeze or ignore (got "${embeds}")`);
+  }
+
   const prewarmMode: 'full' | 'cache' | 'none' =
     input.prewarm?.mode ??
     (input.prewarm?.enabled === false ? 'none' : input.prewarm?.reloadAfter ? 'cache' : 'full');
@@ -371,7 +398,8 @@ export function resolveConfig(input: Config): Resolved {
       clock: input.page?.clock ?? 'virtual',
       seekAnimations: input.page?.seekAnimations ?? true,
       cursor: resolveCursor(input.page?.cursor, url),
-      video: input.page?.video ?? 'sync',
+      video,
+      embeds,
       css: input.page?.css ?? '',
       script: input.page?.script ?? '',
       settle: input.page?.settle ?? 0,

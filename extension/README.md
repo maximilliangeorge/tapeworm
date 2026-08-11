@@ -57,9 +57,15 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    distance as they resolve).
    **● Record** captures a stretch of real interaction until ESC, as one
    `record` step. The preview replays a take's scroll, traces the pointer
-   with a cursor dot, emulates hover under it, and fires its clicks the same
-   synthetic way — so a recorded click that routes client-side routes in the
-   preview too. Drags stay render-only. Clicking through a link to a **new
+   with a cursor dot (filled while the button is held), emulates hover under
+   it, and fires its clicks the same synthetic way — so a recorded click that
+   routes client-side routes in the preview too. Recorded **drags** replay
+   synthetically as well: pointer-listener drags get per-tick moves with the
+   button held (aimed at the capturing element if the page grabbed the
+   pointer), and a `draggable="true"` source gets the native HTML5 sequence —
+   dragstart, dragenter/dragover along the path, drop where it was accepted,
+   dragend. Libraries that insist on `isTrusted` input only respond in the
+   render, where the drag is real. Clicking through a link to a **new
    document** mid-recording splits the take automatically — `record` →
    `click` → `record` — and recording resumes on the destination once it
    loads.
