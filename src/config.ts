@@ -212,14 +212,26 @@ const BUILTIN_CURSOR = { image: null, tipX: 5, tipY: 3, size: 22 } as const;
  * not render an invisible cursor minutes in.
  */
 function resolveCursor(
-  c: boolean | { image?: unknown; tip?: unknown; size?: unknown } | undefined,
+  c: boolean | { image?: unknown; tip?: unknown; size?: unknown; fade?: unknown } | undefined,
   pageUrl: string,
 ): Resolved['page']['cursor'] {
   if (c === false) return false;
-  if (c === undefined || c === true) return { ...BUILTIN_CURSOR };
-  if (typeof c !== 'object' || typeof c.image !== 'string' || c.image === '') {
-    throw new Error('"page.cursor" must be true, false, or { image: "path or url", tip?: [x, y], size?: px }');
+  if (c === undefined || c === true) return { ...BUILTIN_CURSOR, fade: 0 };
+  const shapeError = () =>
+    new Error('"page.cursor" must be true, false, or { image?: "path or url", tip?: [x, y], size?: px, fade?: seconds } (tip/size require image)');
+  if (typeof c !== 'object' || c === null) throw shapeError();
+  const fade = c.fade ?? 0;
+  if (typeof fade !== 'number' || !Number.isFinite(fade) || fade < 0) {
+    throw new Error('page.cursor.fade must be seconds >= 0');
   }
+  if (c.image === undefined) {
+    // Options-only form: the built-in arrow, faded. tip/size describe a
+    // replacement sprite, so without one they're a mistake worth surfacing —
+    // and a bare {} is too.
+    if (c.tip !== undefined || c.size !== undefined || c.fade === undefined) throw shapeError();
+    return { ...BUILTIN_CURSOR, fade };
+  }
+  if (typeof c.image !== 'string' || c.image === '') throw shapeError();
   const tip = c.tip ?? [0, 0];
   if (
     !Array.isArray(tip) || tip.length !== 2 ||
@@ -254,7 +266,7 @@ function resolveCursor(
     }
     image = `data:${mime};base64,${readFileSync(path).toString('base64')}`;
   }
-  return { image, tipX: tip[0], tipY: tip[1], size };
+  return { image, tipX: tip[0], tipY: tip[1], size, fade };
 }
 
 export function resolveConfig(input: Config): Resolved {

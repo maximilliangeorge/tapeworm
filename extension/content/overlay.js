@@ -25,7 +25,7 @@ let emit = () => {};
 let host = null;
 let shadow = null;
 let els = {};
-let settings = { width: 1280, height: 800, dpr: 2, fps: 60 };
+let settings = { width: 1280, height: 800, dpr: 2, fps: 60, cursorFade: 0 };
 let picking = false;
 let pickMode = 'move'; // 'move' | 'click' | 'hover' — what the next pick records
 let pickTarget = null;
@@ -872,7 +872,11 @@ function resolveDeferred(geo, t) {
   }
 }
 
-/** Trace the recorded pointer with the dot while t is inside a record segment. */
+/** Trace the recorded pointer with the dot while t is inside a record segment.
+ *  settings.cursorFade (seconds, 0 = off) ramps its opacity in after the dot
+ *  appears and out before it disappears — anchored to the same appear and
+ *  disappear moments the dot already has, mirroring what the render does to
+ *  its sprite. Clamped to half the segment so the ramps never cross. */
 function updatePreviewCursor(geo, tSec) {
   if (!els.previewCursor) return;
   const t = Math.max(0, Math.min(tSec, geo.total));
@@ -883,6 +887,10 @@ function updatePreviewCursor(geo, tSec) {
       st.display = 'block';
       st.left = p.x + 'px';
       st.top = p.y + 'px';
+      const fade = Math.min(settings.cursorFade || 0, (s.t1 - s.t0) / 2);
+      st.opacity = fade > 0
+        ? String(Math.max(0, Math.min(1, (t - s.t0) / fade, (s.t1 - t) / fade)))
+        : '';
       return;
     }
   }

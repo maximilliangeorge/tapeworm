@@ -349,16 +349,22 @@ function ensureCursor() {
   return cursorEl;
 }
 
-/** c = {x, y, down} places the sprite (tip on the point); null hides it. */
+/**
+ * c = {x, y, down, alpha?} places the sprite (tip on the point); null hides
+ * it. alpha (0..1, default 1) is the appear/disappear fade — computed on the
+ * Node side per frame, so it stays a pure function of the frame index.
+ */
 function drawCursor(c) {
   if (!OPT.cursor) return;
   if (c == null) {
     if (cursorEl) cursorEl.style.transform = 'translate(-9999px,-9999px)';
     return;
   }
-  ensureCursor().style.transform =
+  const el = ensureCursor();
+  el.style.transform =
     'translate(' + (c.x - OPT.cursor.tipX) + 'px,' + (c.y - OPT.cursor.tipY) + 'px)' +
     (c.down ? ' scale(0.88)' : '');
+  el.style.opacity = c.alpha == null ? '' : String(Math.max(0, Math.min(1, c.alpha)));
 }
 
 // ---------------------------------------------------------------- lazy content
@@ -498,9 +504,9 @@ window.__sr = {
    * (old view still at the click offset, jump-to-top when the new view mounts),
    * and imposing an offset would fight it on camera.
    *
-   * cursor: {x, y, down} draws the sprite there, null hides it, undefined
-   * (old callers) leaves it alone. Applied before the paint settle so the
-   * sprite is in the screenshot.
+   * cursor: {x, y, down, alpha?} draws the sprite there (alpha = fade
+   * opacity), null hides it, undefined (old callers) leaves it alone.
+   * Applied before the paint settle so the sprite is in the screenshot.
    */
   async frame(y, tSec, imageBudgetMs, cursor) {
     mode = 'stepped';

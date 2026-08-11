@@ -9,6 +9,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cursor fade.** Opt-in: the drawn gesture cursor can fade in where it
+  appears and out where it disappears instead of popping — `page.cursor.fade`
+  (seconds; works with or without a replacement `image`), `--cursor-fade` on
+  the CLI, and a **Cursor fade** setting in the extension, whose preview dot
+  fades the same way and whose exported config carries the value. Default 0 —
+  no fade, exactly the old behaviour. Timings don't shift: the fade-out ends
+  on the frame the sprite used to vanish on, and the opacity is a pure
+  function of the frame index, keeping renders deterministic.
+
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
   site's saves listed first — and loads or deletes past ones. The working

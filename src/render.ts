@@ -15,7 +15,7 @@ import type { Connection, Session } from './cdp.ts';
 import { concatSegments, createEncoder, createPngWriter, type Encoder } from './encode.ts';
 import { openPage, prewarm, resetPage, settleNewDocument, sleep, waitForDocumentReady, waitForSoftNavigation } from './page.ts';
 import { strobeThreshold } from './easing.ts';
-import { buildTrack, peakStep, type Track } from './timeline.ts';
+import { buildTrack, cursorAlphas, peakStep, type Track } from './timeline.ts';
 import type { Resolved, Step } from './types.ts';
 
 export type Progress = {
@@ -45,7 +45,7 @@ async function captureFrame(
   y: number,
   tSec: number,
   cfg: Resolved,
-  cursor?: { x: number; y: number; down: boolean } | null,
+  cursor?: { x: number; y: number; down: boolean; alpha?: number } | null,
 ): Promise<Buffer> {
   const free = Number.isNaN(y);
   const cursorArg = cursor === undefined ? '' : `, ${JSON.stringify(cursor)}`;
@@ -371,6 +371,11 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   const segments: string[] = [];
   const drift: string[] = [];
 
+  // Opt-in cursor fade: one opacity per frame, precomputed from the track so
+  // it stays a pure function of the frame index like everything else.
+  const fadeSec = cfg.page.cursor === false ? 0 : cfg.page.cursor.fade;
+  const alphas = fadeSec > 0 ? cursorAlphas(track, cfg.fps, fadeSec) : null;
+
   try {
     await Promise.all(
       ranges.map(async ([from, to], shard) => {
@@ -393,6 +398,7 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         // across whatever passes under it.
         let pointerAt: number | null = null;
         let cursorShown = false;
+        let lastSprite: { x: number; y: number; down: boolean } | null = null;
         for (let n = from; n < to; n++) {
           const y = track.offsets[n];
           const t = n / cfg.fps;
@@ -419,7 +425,7 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
           // is driven by the frame() eval that follows, which also
           // birth-stamps any transition these events just triggered.
           const ptr = track.pointer[n];
-          let cursor: { x: number; y: number; down: boolean } | null | undefined;
+          let cursor: { x: number; y: number; down: boolean; alpha?: number } | null | undefined;
           if (ptr) {
             await worker.session.eval(`window.__sr.setScroll(${y})`);
             const hasUp = ptr.edges?.some((e) => e.kind === 'up') ?? false;
@@ -483,7 +489,9 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
             }
             pointerAt = y;
             cursor = { x: ptr.x, y: ptr.y, down: ptr.down };
+            if (alphas) cursor.alpha = alphas[n];
             cursorShown = true;
+            lastSprite = { x: ptr.x, y: ptr.y, down: ptr.down };
           } else if (pointerAt !== null && (Number.isNaN(y) || y !== pointerAt)) {
             await parkPointer(worker.session);
             pointerAt = null;
@@ -491,6 +499,10 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
               cursor = null; // hide the drawn cursor along with the real one
               cursorShown = false;
             }
+          } else if (alphas && cursorShown && lastSprite) {
+            // The sprite is parked (a record step's hold) but its fade-out may
+            // be running — keep re-drawing it with this frame's opacity.
+            cursor = { ...lastSprite, alpha: alphas[n] };
           }
           let png: Buffer;
           try {

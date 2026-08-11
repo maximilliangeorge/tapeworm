@@ -135,6 +135,8 @@ The sprite is replaceable at render time — a branded pointer, a hand, a dot:
 
 `image` is a local image file (png/svg/gif/jpeg/webp — embedded into the render at config time, so a typo'd path fails before Chrome launches), or an `https:`/`data:` URL. `tip` is the [x, y] px inside the rendered sprite where the pointer tip sits — the point that lands on what the recording pointed at (default `[0, 0]`, the top-left corner). `size` is the rendered width in CSS px, height keeping the image's aspect (default 32). The press feedback (a slight shrink around the tip while a button is down) applies to a replacement sprite too. From the CLI, `--cursor hand.png` does the same and `--cursor none` hides it.
 
+By default the sprite pops in on the recording's first frame and pops out when the scroll first moves off wherever it parked (through a `hold`, the sprite stays up). `"fade": 0.3` softens both edges: the sprite ramps to full opacity over its first 0.3s on screen and back to nothing over its last 0.3s, ending exactly where it used to vanish — timings don't shift, and a run too short for both ramps shrinks them so they never cross. It works with the built-in arrow alone (`"cursor": { "fade": 0.3 }`) or alongside `image`/`tip`/`size`; `0` (the default) means no fade. From the CLI, `--cursor-fade 0.3`. The opacity is computed per frame index like everything else, never from the wall clock. The extension has the same knob (**Cursor fade** in the setup panel): its preview dot fades identically, and the exported config carries the value into the render.
+
 Three rules keep recordings honest:
 
 - **The viewport is part of the recording.** The step stamps the viewport it was captured at, and a render at any other size is refused — breakpoints make a different size a different page, and scaling coordinates would click the wrong things. Fit the window before recording (the extension pushes you to), or set the config's `viewport` to the recorded size.
@@ -307,6 +309,7 @@ tapeworm <config.json> | <url> | -     # - reads the config from stdin
     --video <mode>     sync | freeze | ignore
     --clock <mode>     virtual | real
     --cursor <image>   replace the drawn gesture cursor; "none" hides it
+    --cursor-fade <s>  fade the drawn cursor in/out over this many seconds, default 0
     --prewarm <mode>   full | cache | none, default full
     --reveals          shorthand for --prewarm cache
     --image-budget <ms>  longest a frame waits for a loading image

@@ -80,7 +80,7 @@ function fakeEl(): any {
   el.appendChild = (c: unknown) => { el.children.push(c); return c; };
   el.append = (...cs: unknown[]) => { el.children.push(...cs); };
   el.remove = () => { el.__removed = true; };
-  el.attachShadow = () => fakeEl();
+  el.attachShadow = () => (el.__shadow ??= fakeEl()); // kept reachable so tests can inspect overlay elements
   return el;
 }
 
@@ -177,6 +177,49 @@ test('overlay seek lands the same offsets the renderer would', () => {
   assert.equal(w.scrollY, 2000);
   O.seek(steps, 99);
   assert.equal(w.scrollY, 4000, 'clamped to the end');
+});
+
+test('preview cursor dot fades in/out with settings.cursorFade, and stays opaque without it', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, cursorFade: 0.5 });
+  const steps = [
+    { type: 'start', at: 'top', hold: 1 },
+    {
+      type: 'record',
+      samples: { t: [0, 2000], x: [100, 300], y: [50, 70], s: [0, 100] },
+      buttons: [],
+      viewport: { width: 1000, height: 700, dpr: 2 },
+      hold: 1, // so "past the recording" below is inside the timeline, not clamped onto its end
+    },
+  ];
+  // the overlay lives in a closed shadow root — the harness keeps it reachable
+  const host = w.document.documentElement.children.find((c: any) => c.__shadow);
+  const dot = host.__shadow.children.find((c: any) => c.className === 'preview-cursor');
+
+  O.seek(steps, 0.5); // mid-start-hold: before the recording, dot hidden
+  assert.equal(dot.style.display, 'none');
+
+  O.seek(steps, 1.1); // 0.1s into the recording, fade 0.5 → 20% opaque
+  assert.equal(dot.style.display, 'block');
+  assert.ok(Math.abs(Number(dot.style.opacity) - 0.2) < 1e-9, `fading in, got ${dot.style.opacity}`);
+
+  O.seek(steps, 2.0); // middle: fully opaque, tracing the recorded pointer
+  assert.equal(dot.style.opacity, '1');
+  assert.equal(dot.style.left, '200px');
+  assert.equal(dot.style.top, '60px');
+
+  O.seek(steps, 2.9); // 0.1s before the recording ends → 20% again
+  assert.ok(Math.abs(Number(dot.style.opacity) - 0.2) < 1e-9, `fading out, got ${dot.style.opacity}`);
+
+  O.seek(steps, 3.5); // past the recording: hidden again
+  assert.equal(dot.style.display, 'none');
+
+  // opt-out: no cursorFade → the stylesheet's full opacity, no inline override
+  O.setSettings({ cursorFade: 0 });
+  O.seek(steps, 1.05);
+  assert.equal(dot.style.opacity, '', 'no fade: opacity left alone');
 });
 
 test('preview emulates hover: marker class applied at hover time, cleared by later interactions', () => {

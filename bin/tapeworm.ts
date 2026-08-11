@@ -43,6 +43,8 @@ OPTIONS
       --cursor <image>   replace the drawn gesture cursor with an image file or
                          https/data: URL (pointer tip at its top-left corner);
                          "none" hides it. Config page.cursor also sets tip/size.
+      --cursor-fade <s>  fade the drawn cursor in/out over this many seconds
+                         where it appears and disappears, default 0 (no fade)
       --prewarm <mode>   full | cache | none, default full
                          full  = load everything first, then film a clean pass
                          cache = warm the cache, reload, film reveals as they happen
@@ -72,7 +74,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const flags: Flags = {};
   const takesValue = new Set([
     'out', 'o', 'fps', 'width', 'height', 'dpr', 'crf', 'jobs', 'j',
-    'sections', 'video', 'clock', 'cursor', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
+    'sections', 'video', 'clock', 'cursor', 'cursor-fade', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -198,6 +200,15 @@ async function main(): Promise<void> {
   const cursor = str(flags, 'cursor');
   if (cursor) {
     config.page = { ...config.page, cursor: cursor === 'none' ? false : { image: cursor } };
+  }
+  const cursorFade = num(flags, 'cursor-fade');
+  if (cursorFade !== undefined) {
+    // Merge with whatever --cursor / the config already chose; a cursor
+    // switched off stays off.
+    const cur = config.page?.cursor;
+    if (cur !== false) {
+      config.page = { ...config.page, cursor: { ...(typeof cur === 'object' ? cur : {}), fade: cursorFade } };
+    }
   }
   const settle = num(flags, 'settle');
   if (settle !== undefined) config.page = { ...config.page, settle };

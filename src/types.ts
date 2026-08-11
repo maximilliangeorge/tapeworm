@@ -195,8 +195,13 @@ export type Config = {
      * inside the *rendered* sprite where the pointer tip sits — default
      * [0, 0], the top-left corner. `size` is the rendered width in CSS px,
      * height keeping the image's aspect — default 32.
+     *
+     * `fade` is how many seconds the sprite fades in when it appears and out
+     * before it disappears, instead of popping. Default 0 (no fade). It can
+     * be set without `image` (`{ fade: 0.3 }` fades the built-in arrow), but
+     * `tip`/`size` describe a replacement sprite and require `image`.
      */
-    cursor?: boolean | { image: string; tip?: [number, number]; size?: number };
+    cursor?: boolean | { image?: string; tip?: [number, number]; size?: number; fade?: number };
     video?: VideoMode;
     /** Extra CSS injected before the page's own scripts run. */
     css?: string;
@@ -281,9 +286,10 @@ export type Resolved = {
      * false = never drawn. Otherwise the sprite to draw: the built-in arrow
      * when `image` is null, else an image URL (local files became data: URIs
      * at config time). tipX/tipY are the px inside the rendered sprite where
-     * the pointer tip sits; size is the rendered width in CSS px.
+     * the pointer tip sits; size is the rendered width in CSS px. fade is the
+     * appear/disappear fade in seconds, 0 = pop.
      */
-    cursor: false | { image: string | null; tipX: number; tipY: number; size: number };
+    cursor: false | { image: string | null; tipX: number; tipY: number; size: number; fade: number };
     video: VideoMode;
     css: string;
     script: string;

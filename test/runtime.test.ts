@@ -210,6 +210,24 @@ test('frame() draws the cursor sprite: positioned, pressed, hidden — and old c
   assert.match(el.style.transform, /-9999px/, 'undefined leaves it as it was');
 });
 
+test('frame() applies the cursor fade alpha as opacity; an alpha-less draw clears it', async () => {
+  const { sr, settle, appended } = bootWithCursorDom();
+  sr.beginCapture(false);
+
+  await settle(sr.frame(0, 1, 0, { x: 100, y: 50, down: false, alpha: 0.25 }));
+  const el = appended[0];
+  assert.equal(el.style.opacity, '0.25', 'mid-fade frame');
+
+  await settle(sr.frame(0, 1.1, 0, { x: 110, y: 50, down: false, alpha: 1 }));
+  assert.equal(el.style.opacity, '1');
+
+  await settle(sr.frame(0, 1.2, 0, { x: 120, y: 50, down: false, alpha: 1.7 }));
+  assert.equal(el.style.opacity, '1', 'clamped to 1');
+
+  await settle(sr.frame(0, 1.3, 0, { x: 130, y: 50, down: false }));
+  assert.equal(el.style.opacity, '', 'no alpha (fade off): opacity left to the stylesheet default');
+});
+
 test('__sr.cursor drives the same sprite by hand', () => {
   const { sr, appended } = bootWithCursorDom();
   sr.cursor(10, 20, false);

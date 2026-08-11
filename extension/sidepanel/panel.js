@@ -15,14 +15,14 @@
 'use strict';
 
 const EASES = ['linear', 'natural', ...Object.keys(globalThis.TapewormEasing.NAMED)];
-const SETTING_INPUTS = [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps']];
+const SETTING_INPUTS = [['s-width', 'width'], ['s-height', 'height'], ['s-dpr', 'dpr'], ['s-fps', 'fps'], ['s-fade', 'cursorFade']];
 const $ = (id) => document.getElementById(id);
 
 let tabId = null;
 let state = {
   url: '',
   title: '',
-  settings: { width: 1280, height: 800, dpr: 2, fps: 60 },
+  settings: { width: 1280, height: 800, dpr: 2, fps: 60, cursorFade: 0 },
   steps: [{ type: 'start', at: 'top', hold: 0.8 }],
   codec: 'h264',
 };
@@ -76,6 +76,7 @@ async function saveState() {
 async function loadState() {
   const got = await chrome.storage.session.get('doc:' + tabId);
   if (got['doc:' + tabId]) state = got['doc:' + tabId];
+  state.settings.cursorFade ??= 0; // states saved before the setting existed
 }
 
 /** The site a timeline belongs to: its pinned start url's domain, else the page's. */
@@ -261,7 +262,8 @@ function onPreviewTime(d) {
 // ---------------------------------------------------------------- readiness + stages
 function renderSetupSum() {
   const s = state.settings;
-  $('setup-sum').textContent = s.width + '×' + s.height + ' @' + s.dpr + 'x · ' + s.fps + ' fps';
+  $('setup-sum').textContent = s.width + '×' + s.height + ' @' + s.dpr + 'x · ' + s.fps + ' fps' +
+    (s.cursorFade > 0 ? ' · cursor fade ' + s.cursorFade + 's' : '');
 }
 
 function setWarmed(v) {
@@ -871,10 +873,13 @@ async function buildConfig() {
   // The start step's pinned url wins — the tab may have navigated since.
   const start = state.steps[0];
   const url = (start && start.type === 'start' && start.url) || (info && info.url) || currentPageUrl;
+  const cursorFade = Number(state.settings.cursorFade) || 0;
   return {
     url,
     viewport: { width: state.settings.width, height: state.settings.height, dpr: state.settings.dpr },
     fps: state.settings.fps,
+    // only when opted in — a fade-less config stays byte-identical to before
+    ...(cursorFade > 0 ? { page: { cursor: { fade: cursorFade } } } : {}),
     timeline: state.steps.map(stripInternal),
     meta: {
       authoredWith: 'tapeworm-extension/0.1.0',
@@ -992,6 +997,7 @@ async function libraryLoad(id) {
   const got = await chrome.storage.local.get('library:doc:' + id);
   if (!got['library:doc:' + id]) return false;
   state = got['library:doc:' + id];
+  state.settings.cursorFade ??= 0; // saves from before the setting existed
   expandedIndex = null;
   for (const [inputId, key] of SETTING_INPUTS) $(inputId).value = String(state.settings[key]);
   $('codec').value = state.codec || 'h264';
