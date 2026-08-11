@@ -189,14 +189,25 @@ export type Config = {
      * visible in the video (screenshots never contain the real pointer).
      * Input is still dispatched when false. Default true.
      *
-     * An object replaces the built-in arrow with your own sprite. `image` is
+     * `{ auto: true }` draws the bundled macOS cursor set (assets/cursors/,
+     * from https://github.com/sawyerh/cursor.in), switching sprite per frame
+     * with the CSS cursor in effect under the pointer — arrow over the page,
+     * pointing hand over links, open/closed hand across a grab, zoom, help,
+     * not-allowed, and so on. Each cursor renders at its natural macOS size
+     * with its own hotspot; `size` rescales the whole set, stated as the
+     * arrow's rendered width in CSS px (default 28, the natural size).
+     *
+     * `{ image: … }` replaces the built-in arrow with one sprite of your own:
      * a local image file (png/svg/gif/jpeg/webp, embedded into the render at
      * config time), or an https:// or data: URL. `tip` is the [x, y] px
      * inside the *rendered* sprite where the pointer tip sits — default
      * [0, 0], the top-left corner. `size` is the rendered width in CSS px,
      * height keeping the image's aspect — default 32.
      */
-    cursor?: boolean | { image: string; tip?: [number, number]; size?: number };
+    cursor?:
+      | boolean
+      | { auto: true; image?: never; tip?: never; size?: number }
+      | { image: string; auto?: never; tip?: [number, number]; size?: number };
     video?: VideoMode;
     /** Extra CSS injected before the page's own scripts run. */
     css?: string;
@@ -278,12 +289,18 @@ export type Resolved = {
     clock: 'virtual' | 'real';
     seekAnimations: boolean;
     /**
-     * false = never drawn. Otherwise the sprite to draw: the built-in arrow
-     * when `image` is null, else an image URL (local files became data: URIs
-     * at config time). tipX/tipY are the px inside the rendered sprite where
-     * the pointer tip sits; size is the rendered width in CSS px.
+     * false = never drawn. `auto` = the macOS set: sprite name → embedded
+     * data: URI, rendered width, and hotspot, all pre-scaled at config time;
+     * the page runtime picks per frame from the CSS cursor under the pointer.
+     * Otherwise one fixed sprite: the built-in arrow when `image` is null,
+     * else an image URL (local files became data: URIs at config time).
+     * tipX/tipY are the px inside the rendered sprite where the pointer tip
+     * sits; size is the rendered width in CSS px.
      */
-    cursor: false | { image: string | null; tipX: number; tipY: number; size: number };
+    cursor:
+      | false
+      | { image: string | null; auto?: never; tipX: number; tipY: number; size: number }
+      | { auto: Record<string, { url: string; tipX: number; tipY: number; size: number }>; image?: never };
     video: VideoMode;
     css: string;
     script: string;

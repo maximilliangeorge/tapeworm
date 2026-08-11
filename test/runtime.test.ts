@@ -240,6 +240,54 @@ test('beginCapture pre-creates a replacement image cursor so it cannot pop in mi
   assert.match(appended[0].style.cssText, /-9999px/, 'hidden until a gesture draws it');
 });
 
+test('auto cursor: the sprite follows the CSS cursor under the pointer, gestures included', () => {
+  const resolved = cfg({ page: { cursor: { auto: true } } });
+  const sprites = (resolved.page.cursor as { auto: Record<string, { url: string; tipX: number; tipY: number }> }).auto;
+  const appended: any[] = [];
+  const booted = boot(resolved, {});
+  const { window, sr } = booted;
+  window.document.createElement = () => ({
+    className: '', innerHTML: '', style: {}, children: [] as any[],
+    appendChild(child: any) { this.children.push(child); },
+  });
+  window.document.documentElement.appendChild = (el: any) => appended.push(el);
+  let cssCursor = 'default';
+  window.document.elementFromPoint = () => ({});
+  window.getComputedStyle = () => ({ cursor: cssCursor });
+  const shown = () => appended[0].children.filter((c: any) => c.style.display === 'block');
+
+  sr.beginCapture(false);
+  assert.equal(appended.length, 1, 'the whole set is pre-created at capture start');
+  assert.equal(appended[0].children.length, Object.keys(sprites).length, 'one hidden <img> per cursor');
+
+  sr.cursor(100, 50, false);
+  assert.equal(shown().length, 1, 'exactly one sprite visible at a time');
+  assert.equal(shown()[0].src, sprites.cursor.url, 'default CSS cursor draws the arrow');
+  assert.match(appended[0].style.transform, /translate\(91px,43px\)/, "the arrow's hotspot (9,7) sits on the point");
+
+  cssCursor = 'pointer';
+  sr.cursor(100, 50, false);
+  assert.equal(shown().length, 1);
+  assert.equal(shown()[0].src, sprites.pointinghand.url, 'links get the pointing hand');
+  assert.match(appended[0].style.transform, /translate\(88px,42px\)/, 'placed by the fingertip (12,8)');
+  assert.equal(appended[0].style.transformOrigin, '12px 8px', 'press shrink pivots on this hotspot');
+
+  cssCursor = 'grab';
+  sr.cursor(100, 50, false);
+  assert.equal(shown()[0].src, sprites.openhand.url, 'grabbable shows the open hand');
+  sr.cursor(100, 50, true);
+  assert.equal(shown()[0].src, sprites.closedhand.url, 'holding the button closes it');
+  assert.match(appended[0].style.transform, /scale\(0\.88\)/);
+
+  cssCursor = 'url(sprite.png) 4 4, copy';
+  sr.cursor(100, 50, false);
+  assert.equal(shown()[0].src, sprites.copy.url, 'a cursor list degrades to its trailing keyword');
+
+  cssCursor = 'text';
+  sr.cursor(100, 50, false);
+  assert.equal(shown()[0].src, sprites.cursor.url, 'keywords outside the set fall back to the arrow');
+});
+
 test('page.cursor false: input still flows but nothing is ever drawn', async () => {
   const { sr, settle, appended } = bootWithCursorDom({ page: { cursor: false } });
   sr.beginCapture(false);

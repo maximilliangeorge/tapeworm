@@ -207,19 +207,73 @@ const CURSOR_MIME: Record<string, string> = {
 const BUILTIN_CURSOR = { image: null, tipX: 5, tipY: 3, size: 22 } as const;
 
 /**
+ * The macOS cursor sprites auto mode draws (assets/cursors/<name>.svg, vendored
+ * from https://github.com/sawyerh/cursor.in — the runtime picks one per frame
+ * from the CSS cursor in effect under the pointer). `w` is each SVG's natural
+ * width in px, its default rendered size, so the set keeps macOS's relative
+ * proportions. `tip` is the hotspot inside that natural box, measured off the
+ * artwork: the arrow's point, the fingertip, palm and lens centres. The assets
+ * dir also holds `poof` and `jk`, which no CSS cursor value triggers.
+ */
+export const AUTO_CURSORS: Record<string, { w: number; tip: [number, number] }> = {
+  cursor: { w: 28, tip: [9, 7] },
+  pointinghand: { w: 32, tip: [12, 8] },
+  openhand: { w: 32, tip: [16, 14] },
+  closedhand: { w: 32, tip: [16, 14] },
+  copy: { w: 28, tip: [6, 5] },
+  move: { w: 18, tip: [9, 9] },
+  help: { w: 18, tip: [9, 9] },
+  notallowed: { w: 28, tip: [6, 5] },
+  zoomin: { w: 20, tip: [8, 8] },
+  zoomout: { w: 20, tip: [8, 8] },
+  resizenortheastsouthwest: { w: 18, tip: [9, 9] },
+  screenshotselection: { w: 32, tip: [17, 17] },
+};
+
+/**
  * A replacement cursor image is embedded as a data: URI here, at config time —
  * the page can't read local files, and a typo'd path should fail in seconds,
  * not render an invisible cursor minutes in.
  */
 function resolveCursor(
-  c: boolean | { image?: unknown; tip?: unknown; size?: unknown } | undefined,
+  c: boolean | { auto?: unknown; image?: unknown; tip?: unknown; size?: unknown } | undefined,
   pageUrl: string,
 ): Resolved['page']['cursor'] {
   if (c === false) return false;
   if (c === undefined || c === true) return { ...BUILTIN_CURSOR };
-  if (typeof c !== 'object' || typeof c.image !== 'string' || c.image === '') {
-    throw new Error('"page.cursor" must be true, false, or { image: "path or url", tip?: [x, y], size?: px }');
+  const shapeError = () =>
+    new Error(
+      '"page.cursor" must be true, false, { auto: true, size?: px } (the macOS set, ' +
+        'picked per frame from the CSS cursor under the pointer), or ' +
+        '{ image: "path or url", tip?: [x, y], size?: px }',
+    );
+  if (typeof c !== 'object') throw shapeError();
+  if (c.auto !== undefined) {
+    if (c.auto !== true) throw shapeError();
+    if (c.image !== undefined) throw new Error('page.cursor: give either "auto" or "image", not both');
+    if (c.tip !== undefined) {
+      throw new Error('page.cursor.tip does not apply to auto mode — each macOS cursor carries its own hotspot');
+    }
+    // size is the arrow's rendered width; the rest of the set (and every
+    // hotspot) scales with it, keeping macOS's relative proportions.
+    const size = c.size ?? AUTO_CURSORS.cursor.w;
+    if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) {
+      throw new Error('page.cursor.size must be the rendered width in CSS px > 0');
+    }
+    const scale = size / AUTO_CURSORS.cursor.w;
+    const sprites: Record<string, { url: string; tipX: number; tipY: number; size: number }> = {};
+    for (const [name, { w, tip }] of Object.entries(AUTO_CURSORS)) {
+      const svg = readFileSync(new URL(`../assets/cursors/${name}.svg`, import.meta.url));
+      sprites[name] = {
+        url: `data:image/svg+xml;base64,${svg.toString('base64')}`,
+        tipX: tip[0] * scale,
+        tipY: tip[1] * scale,
+        size: w * scale,
+      };
+    }
+    return { auto: sprites };
   }
+  if (typeof c.image !== 'string' || c.image === '') throw shapeError();
   const tip = c.tip ?? [0, 0];
   if (
     !Array.isArray(tip) || tip.length !== 2 ||

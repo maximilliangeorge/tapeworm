@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, parseConfig, resolveConfig } from '../src/config.ts';
+import { AUTO_CURSORS, loadConfig, parseConfig, resolveConfig } from '../src/config.ts';
 import type { Config } from '../src/types.ts';
 
 const BASE: Config = { url: 'https://example.com', timeline: [{ at: 'top' }, { to: 'bottom' }] };
@@ -296,6 +296,38 @@ test('page.cursor: a replacement image is validated and embedded at config time'
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('page.cursor auto: the macOS set embeds with per-cursor sizes and hotspots', () => {
+  const cur = (cursor: unknown) =>
+    resolveConfig({ ...BASE, page: { cursor } } as unknown as Config).page.cursor;
+  const autoOf = (cursor: unknown) => {
+    const r = cur(cursor);
+    assert.ok(r && typeof r === 'object' && 'auto' in r && r.auto, 'resolved to auto mode');
+    return r.auto as Record<string, { url: string; tipX: number; tipY: number; size: number }>;
+  };
+
+  // Every cursor in the set must exist on disk and embed; each keeps its
+  // natural macOS width and carries its own hotspot.
+  const set = autoOf({ auto: true });
+  for (const [name, { w, tip }] of Object.entries(AUTO_CURSORS)) {
+    const s = set[name];
+    assert.ok(s && s.url.startsWith('data:image/svg+xml;base64,'), `${name} embeds as a data: URI`);
+    assert.deepEqual([s.size, s.tipX, s.tipY], [w, tip[0], tip[1]], `${name} natural size + hotspot`);
+  }
+
+  // size rescales the whole set off the arrow's width — hotspots included,
+  // so every tip stays on the same point of the artwork.
+  const doubled = autoOf({ auto: true, size: 56 });
+  assert.deepEqual(
+    [doubled.cursor.size, doubled.pointinghand.size, doubled.pointinghand.tipX, doubled.pointinghand.tipY],
+    [56, 64, 24, 16],
+  );
+
+  assert.throws(() => cur({ auto: true, image: 'x.png' }), /either "auto" or "image"/);
+  assert.throws(() => cur({ auto: true, tip: [1, 2] }), /tip does not apply to auto/);
+  assert.throws(() => cur({ auto: 'yes' }), /"page\.cursor" must be/);
+  assert.throws(() => cur({ auto: true, size: 0 }), /size must be/);
 });
 
 test('parseConfig parses raw text (the stdin path) with the same tolerances as loadConfig', () => {

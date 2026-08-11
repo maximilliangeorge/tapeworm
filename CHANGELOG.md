@@ -9,6 +9,19 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **macOS cursors, chosen per frame.** `page.cursor` now accepts
+  `{ "auto": true, "size?": px }`: the render draws the macOS cursor set
+  (SVGs bundled in `assets/cursors/`, vendored from
+  [cursor.in](https://github.com/sawyerh/cursor.in)) and — like the real OS
+  pointer — switches sprite every frame based on the CSS cursor under the
+  pointer: arrow, pointing hand over links, open/closed hand across a grab,
+  move, copy, help, not-allowed, zoom in/out, NE‑SW resize, crosshair.
+  Keywords with no artwork in the set (`text`, most resize directions) fall
+  back to the arrow. Each cursor renders at its natural macOS size with its
+  own hotspot; `size` rescales the whole set, stated as the arrow's width.
+  From the CLI: `--cursor auto` and the new `--cursor-size <px>` (which also
+  sizes a custom `image` sprite).
+
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
   site's saves listed first — and loads or deletes past ones. The working

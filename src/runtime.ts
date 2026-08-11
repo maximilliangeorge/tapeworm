@@ -329,24 +329,72 @@ function hideOverlays() {
 // (the selector generator refuses those), and a documentElement parent
 // (hideOverlays only scans body children, and discoverSections roots elsewhere).
 let cursorEl = null;
+let cursorImgs = null;   // auto mode: sprite name -> its (pre-created) <img>
+let cursorShown = '';    // auto mode: which sprite is currently displayed
 
 function ensureCursor() {
   if (cursorEl) return cursorEl;
-  const cur = OPT.cursor; // false, or { image, tipX, tipY, size } — tip = where the pointer sits inside the sprite
+  const cur = OPT.cursor; // false, { auto: {name: {url, tipX, tipY, size}} }, or one { image, tipX, tipY, size }
   cursorEl = document.createElement('div');
   cursorEl.className = '__tw-cursor';
   cursorEl.style.cssText =
     'position:fixed;left:0;top:0;z-index:2147483647;' +
     'pointer-events:none;transform:translate(-9999px,-9999px);will-change:transform;' +
-    'transform-origin:' + cur.tipX + 'px ' + cur.tipY + 'px;';
-  cursorEl.innerHTML = cur.image
-    ? '<img src="' + cur.image.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '" ' +
-      'style="display:block;width:' + cur.size + 'px;height:auto">'
-    : '<svg width="' + cur.size + '" height="' + cur.size + '" viewBox="0 0 24 24">' +
-      '<path d="M5.5 3.2 L18.8 11.7 L12.4 12.9 L9.4 19.4 Z" ' +
-      'fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    (cur.auto ? '' : 'transform-origin:' + cur.tipX + 'px ' + cur.tipY + 'px;');
+  if (cur.auto) {
+    // Every sprite exists (hidden) from the start, so switching mid-gesture is
+    // a display toggle between already-decoded images, never a fresh decode.
+    cursorImgs = {};
+    for (const name in cur.auto) {
+      const img = document.createElement('img');
+      img.src = cur.auto[name].url;
+      img.style.cssText = 'display:none;width:' + cur.auto[name].size + 'px;height:auto';
+      cursorImgs[name] = img;
+      cursorEl.appendChild(img);
+    }
+  } else {
+    cursorEl.innerHTML = cur.image
+      ? '<img src="' + cur.image.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '" ' +
+        'style="display:block;width:' + cur.size + 'px;height:auto">'
+      : '<svg width="' + cur.size + '" height="' + cur.size + '" viewBox="0 0 24 24">' +
+        '<path d="M5.5 3.2 L18.8 11.7 L12.4 12.9 L9.4 19.4 Z" ' +
+        'fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  }
   document.documentElement.appendChild(cursorEl);
   return cursorEl;
+}
+
+// CSS cursor keyword -> macOS sprite. Values with no counterpart in the set
+// (text/ibeam, most resize directions) fall back to the arrow.
+const CURSOR_BY_CSS = {
+  default: 'cursor', auto: 'cursor',
+  pointer: 'pointinghand',
+  grab: 'openhand', grabbing: 'closedhand',
+  move: 'move', 'all-scroll': 'move',
+  copy: 'copy', alias: 'copy',
+  help: 'help',
+  'not-allowed': 'notallowed', 'no-drop': 'notallowed',
+  'zoom-in': 'zoomin', 'zoom-out': 'zoomout',
+  'nesw-resize': 'resizenortheastsouthwest',
+  crosshair: 'screenshotselection',
+};
+
+/**
+ * Which macOS sprite belongs at (x, y): the CSS cursor in effect on the
+ * topmost element under the point. A pure function of pointer position and
+ * document state, so frames stay independent. The sprite itself is
+ * pointer-events:none and never hit-tests.
+ */
+function autoCursorName(x, y, down) {
+  let css = 'default';
+  try {
+    const el = document.elementFromPoint(x, y);
+    if (el) css = getComputedStyle(el).cursor || 'default';
+  } catch (e) {}
+  // computed value may be a list — "url(sprite.png) 4 4, pointer" — where the
+  // mandatory trailing keyword is what the custom image degrades to
+  const name = CURSOR_BY_CSS[css.split(',').pop().trim()] || 'cursor';
+  return down && name === 'openhand' ? 'closedhand' : name;
 }
 
 /** c = {x, y, down} places the sprite (tip on the point); null hides it. */
@@ -356,8 +404,25 @@ function drawCursor(c) {
     if (cursorEl) cursorEl.style.transform = 'translate(-9999px,-9999px)';
     return;
   }
-  ensureCursor().style.transform =
-    'translate(' + (c.x - OPT.cursor.tipX) + 'px,' + (c.y - OPT.cursor.tipY) + 'px)' +
+  const el = ensureCursor();
+  let tipX, tipY;
+  if (cursorImgs) {
+    const name = autoCursorName(c.x, c.y, c.down);
+    if (name !== cursorShown) {
+      if (cursorShown) cursorImgs[cursorShown].style.display = 'none';
+      cursorImgs[name].style.display = 'block';
+      cursorShown = name;
+    }
+    const sprite = OPT.cursor.auto[name];
+    tipX = sprite.tipX;
+    tipY = sprite.tipY;
+    el.style.transformOrigin = tipX + 'px ' + tipY + 'px'; // press shrink pivots on this sprite's hotspot
+  } else {
+    tipX = OPT.cursor.tipX;
+    tipY = OPT.cursor.tipY;
+  }
+  el.style.transform =
+    'translate(' + (c.x - tipX) + 'px,' + (c.y - tipY) + 'px)' +
     (c.down ? ' scale(0.88)' : '');
 }
 
@@ -443,10 +508,11 @@ window.__sr = {
     animBirth = new WeakMap();
     mode = 'stepped';
     vnow = 0;
-    // A replacement cursor image is created (hidden, off-screen) now rather
-    // than on its first drawn frame, so the fetch/decode happens before
-    // filming — the sprite must not pop in mid-gesture.
-    if (OPT.cursor && OPT.cursor.image) ensureCursor();
+    // Replacement cursor images (a custom sprite, or the whole auto set) are
+    // created (hidden, off-screen) now rather than on their first drawn frame,
+    // so the fetch/decode happens before filming — a sprite must not pop in
+    // mid-gesture.
+    if (OPT.cursor && (OPT.cursor.image || OPT.cursor.auto)) ensureCursor();
     if (!restartExisting && document.getAnimations) {
       try {
         for (const a of document.getAnimations()) {

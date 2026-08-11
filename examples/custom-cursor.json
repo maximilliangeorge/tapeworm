@@ -25,10 +25,16 @@
   ],
 
   "page": {
-    // Replace the built-in arrow with your own image: a local file (png/svg/gif/
-    // jpeg/webp, embedded into the render at config time — a wrong path fails
-    // before Chrome launches), or an https:// or data: URL. For instance:
+    // Replace the built-in arrow with the macOS cursor set, or your own
+    // image: a local file (png/svg/gif/jpeg/webp, embedded into the render at
+    // config time — a wrong path fails before Chrome launches), or an
+    // https:// or data: URL. For instance:
+    //   "cursor": { "auto": true }
     //   "cursor": { "image": "hand.png", "tip": [14, 2], "size": 40 }
+    //   "auto" — the macOS cursors from assets/cursors/, switching per frame
+    //            with the CSS cursor under the pointer (arrow, pointing hand
+    //            over links, open/closed hand across a grab, zoom, ...);
+    //            "size" rescales the set, stated as the arrow's width
     //   "tip"  — [x, y] px inside the rendered sprite that lands on the recorded
     //            point (default [0, 0], the top-left corner)
     //   "size" — rendered width in CSS px, height keeps the aspect (default 32)

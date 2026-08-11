@@ -40,9 +40,17 @@ OPTIONS
       --sections <n>     how many sections --auto should visit, default 6
       --video <mode>     sync | freeze | ignore, default sync
       --clock <mode>     virtual | real, default virtual
-      --cursor <image>   replace the drawn gesture cursor with an image file or
-                         https/data: URL (pointer tip at its top-left corner);
-                         "none" hides it. Config page.cursor also sets tip/size.
+      --cursor <c>       replace the drawn gesture cursor. "auto" draws the
+                         bundled macOS set, switching per frame with the CSS
+                         cursor under the pointer (arrow, pointing hand over
+                         links, open/closed hand across a grab, zoom, ...).
+                         Or one sprite of your own: an image file or an
+                         https/data: URL, pointer tip at its top-left corner.
+                         "none" hides it.
+      --cursor-size <px> rendered cursor width in CSS px. For auto, the
+                         arrow's width — the other cursors keep macOS's
+                         relative proportions. Config page.cursor also sets
+                         an image sprite's tip point.
       --prewarm <mode>   full | cache | none, default full
                          full  = load everything first, then film a clean pass
                          cache = warm the cache, reload, film reveals as they happen
@@ -72,7 +80,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const flags: Flags = {};
   const takesValue = new Set([
     'out', 'o', 'fps', 'width', 'height', 'dpr', 'crf', 'jobs', 'j',
-    'sections', 'video', 'clock', 'cursor', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
+    'sections', 'video', 'clock', 'cursor', 'cursor-size', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -197,7 +205,18 @@ async function main(): Promise<void> {
   }
   const cursor = str(flags, 'cursor');
   if (cursor) {
-    config.page = { ...config.page, cursor: cursor === 'none' ? false : { image: cursor } };
+    config.page = {
+      ...config.page,
+      cursor: cursor === 'none' ? false : cursor === 'auto' ? { auto: true } : { image: cursor },
+    };
+  }
+  const cursorSize = num(flags, 'cursor-size');
+  if (cursorSize !== undefined) {
+    const cur = config.page?.cursor;
+    if (typeof cur !== 'object' || cur === null) {
+      fail('--cursor-size needs a sprite to size — pass --cursor <preset or image>, or set page.cursor in the config');
+    }
+    config.page = { ...config.page, cursor: { ...cur, size: cursorSize } };
   }
   const settle = num(flags, 'settle');
   if (settle !== undefined) config.page = { ...config.page, settle };

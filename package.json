@@ -16,6 +16,7 @@
     "tapeworm": "node bin/tapeworm.ts"
   },
   "files": [
+    "assets",
     "bin",
     "src",
     "examples",
