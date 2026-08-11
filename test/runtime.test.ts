@@ -16,6 +16,8 @@ type Booted = {
   pump: () => void;
   /** Pump until a promise from the runtime settles. */
   settle: <T>(p: Promise<T>) => Promise<T>;
+  /** Deliver a message event to the runtime's captured window listener. */
+  deliverMessage: (data: unknown, source: unknown) => void;
 };
 
 /**
@@ -29,12 +31,25 @@ function boot(resolved: Resolved, domOver: Record<string, unknown> = {}): Booted
   const noopStyle = { setProperty() {} };
   const collection = () => Object.assign([], { forEach: Array.prototype.forEach });
 
+  const messageListeners: Array<(ev: { data: unknown; source: unknown }) => void> = [];
   const window: any = {
     innerWidth: resolved.width,
     innerHeight: resolved.height,
     scrollY: 0,
     requestAnimationFrame: (cb: (t: number) => void) => rafQueue.push(cb),
     cancelAnimationFrame: () => {},
+    addEventListener: (type: string, cb: (ev: { data: unknown; source: unknown }) => void) => {
+      if (type === 'message') messageListeners.push(cb);
+    },
+    MessageEvent: class {
+      type: string;
+      constructor(type: string, init: Record<string, unknown>) { this.type = type; Object.assign(this, init); }
+    },
+    dispatchEvent: (ev: any) => {
+      if (ev.type === 'message') messageListeners.forEach((l) => l(ev));
+      return true;
+    },
+    URL,
     setTimeout,
     clearTimeout,
     setInterval,
@@ -68,16 +83,119 @@ function boot(resolved: Resolved, domOver: Record<string, unknown> = {}): Booted
     }
     return p;
   };
-  return { window, sr: window.__sr, pump, settle };
+  const deliverMessage = (data: unknown, source: unknown) =>
+    messageListeners.forEach((l) => l({ data: JSON.stringify(data), source }));
+  return { window, sr: window.__sr, pump, settle, deliverMessage };
 }
 
-test('runtimeSource emits syntactically valid JS for every clock/video mode', () => {
+/** A provider iframe as the embeds controller sees one, recording its posts. */
+function embedIframe(src: string) {
+  const sent: any[] = [];
+  const iframe: any = {
+    tagName: 'IFRAME',
+    src,
+    getBoundingClientRect: () => ({ width: 640, height: 360, top: 0, bottom: 360 }),
+    querySelectorAll: () => [],
+    contentWindow: { postMessage: (raw: string) => sent.push(JSON.parse(raw)) },
+  };
+  return { iframe, sent };
+}
+
+test('runtimeSource emits syntactically valid JS for every clock/video/embeds mode', () => {
   for (const clock of ['virtual', 'real'] as const) {
     for (const video of ['sync', 'freeze', 'ignore'] as const) {
-      const src = runtimeSource(cfg({ page: { clock, video } }));
-      new vm.Script(src); // throws on a syntax error in the template literal
+      for (const embeds of ['sync', 'freeze', 'ignore'] as const) {
+        const src = runtimeSource(cfg({ page: { clock, video, embeds } }));
+        new vm.Script(src); // throws on a syntax error in the template literal
+      }
     }
   }
+});
+
+test('a provider iframe is discovered at boot and counted in metrics', () => {
+  const { iframe, sent } = embedIframe('https://player.vimeo.com/video/76979871');
+  const { sr } = boot(cfg(), { querySelectorAll: (sel: string) => (sel === 'iframe' ? [iframe] : []) });
+  assert.equal(sr.metrics().embeds, 1);
+  assert.equal(sr.embedCount(), 1);
+  assert.ok(sent.some((m) => m.method === 'getDuration'), 'handshake went out at boot');
+  const r = sr.embedReport()[0];
+  assert.equal(r.provider, 'vimeo');
+  assert.equal(r.ready, false, 'not ready until the player answers');
+});
+
+test('frame() waits on the embed seek and resolves on the provider ack', async () => {
+  const { iframe, sent } = embedIframe('https://player.vimeo.com/video/76979871');
+  const b = boot(cfg(), { querySelectorAll: (sel: string) => (sel === 'iframe' ? [iframe] : []) });
+  b.deliverMessage({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  b.sr.beginCapture(false);
+  sent.length = 0;
+
+  const p = b.sr.frame(0, 1, 0);
+  const seekMsg = sent.find((m) => m.method === 'setCurrentTime');
+  assert.ok(seekMsg, 'the frame seeks the embed');
+  assert.ok(Math.abs(seekMsg.value - (1 + 0.5 / 60)) < 1e-9, 'half-frame bias, like seekVideo');
+  b.deliverMessage({ event: 'seeked', data: { seconds: seekMsg.value } }, iframe.contentWindow);
+  await b.settle(p);
+
+  const r = b.sr.embedReport()[0];
+  assert.equal(r.ready, true);
+  assert.equal(r.ok, true);
+});
+
+test('frame() re-broadcasts a vimeo timeupdate that a page-registered SDK listener hears', async () => {
+  const { iframe, sent } = embedIframe('https://player.vimeo.com/video/76979871');
+  const b = boot(cfg(), { querySelectorAll: (sel: string) => (sel === 'iframe' ? [iframe] : []) });
+  b.deliverMessage({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+
+  // a page SDK's message listener, registered on the (un-shadowed) window API
+  const heard: any[] = [];
+  b.window.addEventListener('message', (ev: any) => {
+    try {
+      const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+      if (d && d.event === 'timeupdate') heard.push({ ev, d });
+    } catch (e) {}
+  });
+
+  b.sr.beginCapture(false);
+  sent.length = 0;
+  const p = b.sr.frame(0, 2, 0);
+  const seekMsg = sent.find((m) => m.method === 'setCurrentTime');
+  b.deliverMessage({ event: 'seeked', data: { seconds: seekMsg.value } }, iframe.contentWindow);
+  await b.settle(p);
+
+  assert.equal(heard.length, 1, 'one timeupdate per frame');
+  assert.equal(heard[0].ev.origin, 'https://player.vimeo.com', 'passes the SDK origin check');
+  assert.equal(heard[0].ev.source, iframe.contentWindow, 'passes the SDK source check');
+  assert.equal(heard[0].d.data.seconds, Math.round((2 + 0.5 / 60) * 1000) / 1000);
+  assert.equal(heard[0].d.data.duration, 30);
+});
+
+test('embeds: "ignore" tracks nothing and frame() ignores the iframe', async () => {
+  const { iframe, sent } = embedIframe('https://www.youtube.com/embed/dQw4w9WgXcQ');
+  const b = boot(cfg({ page: { embeds: 'ignore' } }), {
+    querySelectorAll: (sel: string) => (sel === 'iframe' ? [iframe] : []),
+  });
+  assert.equal(b.sr.metrics().embeds, 0);
+  assert.equal(iframe.src, 'https://www.youtube.com/embed/dQw4w9WgXcQ', 'no enablejsapi rewrite in ignore mode');
+  b.sr.beginCapture(false);
+  await b.settle(b.sr.frame(0, 1, 0));
+  assert.equal(sent.length, 0);
+});
+
+test('embedsReady gates on the handshake and primes the first frame seek', async () => {
+  const { iframe, sent } = embedIframe('https://player.vimeo.com/video/76979871');
+  const b = boot(cfg(), { querySelectorAll: (sel: string) => (sel === 'iframe' ? [iframe] : []) });
+  b.deliverMessage({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  sent.length = 0;
+
+  const p = b.sr.embedsReady(4000, 2);
+  await new Promise((r) => setTimeout(r, 20)); // the ready-poll chain arms the priming seek
+  const seekMsg = sent.find((m) => m.method === 'setCurrentTime');
+  assert.ok(seekMsg, 'primes a seek to the shard start time');
+  b.deliverMessage({ event: 'seeked', data: { seconds: seekMsg.value } }, iframe.contentWindow);
+  const r = await p;
+  assert.equal(r.embeds, 1);
+  assert.equal(r.ready, true);
 });
 
 test('boots against a bare DOM and exposes the __sr API', () => {
@@ -208,6 +326,24 @@ test('frame() draws the cursor sprite: positioned, pressed, hidden — and old c
 
   await settle(sr.frame(0, 1.4, 0));
   assert.match(el.style.transform, /-9999px/, 'undefined leaves it as it was');
+});
+
+test('frame() applies the cursor fade alpha as opacity; an alpha-less draw clears it', async () => {
+  const { sr, settle, appended } = bootWithCursorDom();
+  sr.beginCapture(false);
+
+  await settle(sr.frame(0, 1, 0, { x: 100, y: 50, down: false, alpha: 0.25 }));
+  const el = appended[0];
+  assert.equal(el.style.opacity, '0.25', 'mid-fade frame');
+
+  await settle(sr.frame(0, 1.1, 0, { x: 110, y: 50, down: false, alpha: 1 }));
+  assert.equal(el.style.opacity, '1');
+
+  await settle(sr.frame(0, 1.2, 0, { x: 120, y: 50, down: false, alpha: 1.7 }));
+  assert.equal(el.style.opacity, '1', 'clamped to 1');
+
+  await settle(sr.frame(0, 1.3, 0, { x: 130, y: 50, down: false }));
+  assert.equal(el.style.opacity, '', 'no alpha (fade off): opacity left to the stylesheet default');
 });
 
 test('__sr.cursor drives the same sprite by hand', () => {

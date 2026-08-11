@@ -36,6 +36,7 @@
         <select id="s-dpr"><option>1</option><option selected>2</option><option>3</option></select>
       </label>
       <label>FPS <input id="s-fps" type="number" value="60" min="1" max="240"></label>
+      <label title="Fade the recording's drawn cursor in and out over this many seconds where it appears and disappears. 0 = no fade (it pops). Applies to the preview dot and the rendered sprite.">Cursor fade (s) <input id="s-fade" type="number" value="0" min="0" max="5" step="0.05"></label>
     </div>
     <div class="setup-row">
       <select id="preset">
@@ -44,7 +45,8 @@
         <option value="1440x900">Laptop 1440×900</option>
         <option value="1920x1080">Desktop 1920×1080</option>
         <option value="1024x768">Small laptop 1024×768</option>
-        <option value="1366x1024">iPad Pro 1366×1024</option>
+        <option value="1024x1366">iPad Pro portrait 1024×1366</option>
+        <option value="1366x1024">iPad Pro landscape 1366×1024</option>
         <option value="768x1024">Tablet 768×1024</option>
         <option value="390x844">Phone 390×844</option>
       </select>

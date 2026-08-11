@@ -25,7 +25,7 @@ let emit = () => {};
 let host = null;
 let shadow = null;
 let els = {};
-let settings = { width: 1280, height: 800, dpr: 2, fps: 60 };
+let settings = { width: 1280, height: 800, dpr: 2, fps: 60, cursorFade: 0 };
 let picking = false;
 let pickMode = 'move'; // 'move' | 'click' | 'hover' — what the next pick records
 let pickTarget = null;
@@ -84,6 +84,7 @@ const CSS = `
     background: rgba(22, 24, 29, 0.85); border: 2px solid #fff;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); transform: translate(-50%, -50%);
   }
+  .preview-cursor.down { background: rgba(64, 156, 255, 0.95); }
 `;
 
 function mount(onEmit) {
@@ -325,6 +326,9 @@ function onPickClick(ev) {
     quality: best.quality,
     unique: best.unique,
     resolvedY: safeResolve(anchor),
+    // the page's URL at the moment of the pick — the panel's cached copy can
+    // be stale (SPA route changes never re-announce page:info)
+    url: location.href,
   });
 }
 
@@ -359,7 +363,9 @@ function startRecording() {
   if (recording) return { error: 'already-recording' };
   if (preview && preview.playing) return { error: 'preview-playing' };
   stopPicker(); // ESC must mean exactly one thing at a time
-  recording = { t0: performance.now(), last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0, clickTarget: null };
+  // the URL is captured at the START of the take: an SPA route change while
+  // recording moves location.href, but the replay begins where this page was
+  recording = { t0: performance.now(), url: location.href, last: null, t: [], x: [], y: [], s: [], buttons: [], raf: 0, clickTarget: null };
   addEventListener('pointermove', onRecPointer, { capture: true, passive: true });
   addEventListener('pointerdown', onRecDown, { capture: true, passive: true });
   addEventListener('pointerup', onRecUp, { capture: true, passive: true });
@@ -457,6 +463,7 @@ function buildTake(rec, cutoffMs) {
     // an honest stamp is what makes that check mean something
     viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
     durationMs: lastT,
+    url: rec.url,
   };
 }
 
@@ -497,6 +504,7 @@ function onRecPageHide() {
   emit('record:split', {
     take: buildTake(rec, lastDown.t), // null when the click came almost immediately
     click: rec.clickTarget,
+    url: rec.url, // the take may be null — the split still knows its page
   });
 }
 
@@ -542,9 +550,13 @@ function ensureHoverRules() {
  * pointer* types go out as PointerEvents (what modern listeners subscribe
  * to), over/out carry relatedTarget, enter/leave don't bubble, and the
  * coordinates are the actual pointer position when the caller knows it
- * (element centre otherwise). Untrusted either way — isTrusted-gated
- * libraries only respond in the render.
+ * (element centre otherwise). While a recorded press is held, every event
+ * carries buttons=1 (`pressedButtons`) — drag libraries read the held state
+ * off moves. Untrusted either way — isTrusted-gated libraries only respond
+ * in the render.
  */
+let pressedButtons = 0; // 1 while the gesture machine is replaying a held press
+
 function fireMouse(el, type, opts) {
   opts = opts || {};
   try {
@@ -561,9 +573,13 @@ function fireMouse(el, type, opts) {
       view: window,
       clientX: x,
       clientY: y,
+      button: 0,
+      buttons: opts.buttons != null ? opts.buttons : pressedButtons,
+      // a11y-minded widgets tell pointer clicks from keyboard ones by detail
+      detail: type === 'mousedown' || type === 'mouseup' || type === 'click' ? 1 : 0,
       relatedTarget: opts.related || null,
     };
-    if (type.indexOf('pointer') === 0) {
+    if (type.indexOf('pointer') === 0 || type === 'lostpointercapture') {
       init.pointerId = 1;
       init.pointerType = 'mouse';
       init.isPrimary = true;
@@ -633,24 +649,194 @@ function setPreviewHoverEl(el, x, y) {
 }
 
 /**
- * Synthetic click — down, up, click. A click step carries its target anchor
- * and is hit at the element's centre; a recorded click carries only the
- * pointer position and is hit-tested there.
+ * Synthetic click for a click STEP — down, up, click at the target anchor's
+ * centre. Recorded presses go through the gesture machine below instead,
+ * which spreads the edges over their real recorded times.
  */
 function firePreviewClick(c) {
   let el = null;
-  const at = c.target ? {} : { x: c.x, y: c.y };
-  if (c.target) {
-    try { el = document.querySelectorAll(c.target.selector)[c.target.nth || 0] || null; } catch (e) {}
-  } else {
-    el = hitTest(c.x, c.y);
-  }
+  try { el = document.querySelectorAll(c.target.selector)[c.target.nth || 0] || null; } catch (e) {}
   if (!el) return;
-  fireMouse(el, 'pointerdown', at);
-  fireMouse(el, 'mousedown', at);
-  fireMouse(el, 'pointerup', at);
-  fireMouse(el, 'mouseup', at);
-  fireMouse(el, 'click', at);
+  fireMouse(el, 'pointerdown', { buttons: 1 });
+  fireMouse(el, 'mousedown', { buttons: 1 });
+  fireMouse(el, 'pointerup', { buttons: 0 });
+  fireMouse(el, 'mouseup', { buttons: 0 });
+  fireMouse(el, 'click', { buttons: 0 });
+}
+
+// ---------------------------------------------------------------- recorded gesture replay (preview only)
+/**
+ * The render replays recorded presses as trusted CDP input; the preview
+ * approximates them with synthetic events — enough to watch a drag land where
+ * it landed live. A press becomes one gesture ({ tDown, tUp } against its
+ * recording), driven tick by tick during playback (never on scrub):
+ *
+ *   - within DRAG_SLOP_PX of the press it's a click: pointerup/mouseup/click
+ *     at the recorded spot, same routing behaviour as a click step;
+ *   - past the slop with a `draggable="true"` source it's native HTML5 drag
+ *     and drop: dragstart on the source, per-tick dragenter/dragover on
+ *     whatever is under the pointer (a shared DataTransfer carries setData
+ *     from dragstart to drop), drop where dragover was accepted, dragend
+ *     always — mouse/hover emulation pauses meanwhile, as in a real drag;
+ *   - past the slop otherwise it's a pointer-listener drag (dnd-kit,
+ *     interact.js, sliders): the per-tick moves flow with buttons=1 through
+ *     the normal hover machinery, or straight at the capturing element when
+ *     the page grabbed the pointer — pointerId 1 IS the real mouse, so a
+ *     library's setPointerCapture(1) in its pointerdown handler actually
+ *     takes, and the machine honours it like the browser would.
+ *
+ * isTrusted-gated libraries still only respond in the render.
+ */
+const DRAG_SLOP_PX = 8;
+
+/**
+ * One native drag-and-drop event, on the sequence's shared DataTransfer so
+ * dragstart's setData is readable at drop, like the real protocol (minus
+ * protected mode — the preview has no reason to hide the payload). Returns
+ * true when the page called preventDefault — how dragstart vetoes the drag
+ * and dragover accepts a drop target.
+ */
+function fireDrag(el, type, dt, x, y) {
+  try {
+    const init = {
+      bubbles: true,
+      cancelable: type !== 'dragleave' && type !== 'dragend',
+      composed: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      buttons: type === 'drop' || type === 'dragend' ? 0 : 1,
+    };
+    let ev;
+    if (typeof DragEvent === 'function') {
+      init.dataTransfer = dt;
+      ev = new DragEvent(type, init);
+    } else {
+      ev = new MouseEvent(type, init);
+      try { Object.defineProperty(ev, 'dataTransfer', { value: dt }); } catch (e) {}
+    }
+    return !el.dispatchEvent(ev);
+  } catch (e) { return false; }
+}
+
+/** Land the press: hover the element under it, pointerdown/mousedown, note capture. */
+function pressGesture(g) {
+  const p = G.pointerAt(g.rec, g.tDown - g.recT0);
+  const el = hitTest(p.x, p.y);
+  const d = {
+    g, source: el, x0: p.x, y0: p.y, x: p.x, y: p.y,
+    dragging: false, native: null, dt: null, over: null, canDrop: false, capture: null,
+  };
+  if (!el) return d;
+  setPreviewHoverEl(el, p.x, p.y); // a real press lands on an already-hovered element
+  pressedButtons = 1;
+  fireMouse(el, 'pointerdown', { x: p.x, y: p.y });
+  fireMouse(el, 'mousedown', { x: p.x, y: p.y });
+  for (const n of chainOf(el)) {
+    try { if (n.hasPointerCapture && n.hasPointerCapture(1)) { d.capture = n; break; } } catch (e) {}
+  }
+  return d;
+}
+
+function moveGesture(d, p) {
+  d.x = p.x; d.y = p.y;
+  if (!d.source) return;
+  if (!d.dragging && Math.hypot(p.x - d.x0, p.y - d.y0) > DRAG_SLOP_PX) {
+    d.dragging = true;
+    let src = null;
+    try { src = d.source.closest ? d.source.closest('[draggable="true"]') : null; } catch (e) {}
+    if (src) {
+      try { d.dt = typeof DataTransfer === 'function' ? new DataTransfer() : null; } catch (e) {}
+      try { if (d.dt) d.dt.effectAllowed = 'all'; } catch (e) {}
+      if (!fireDrag(src, 'dragstart', d.dt, p.x, p.y)) {
+        d.native = src;
+        // starting a native drag cancels the pointer stream, as the browser does
+        fireMouse(d.source, 'pointercancel', { x: p.x, y: p.y, buttons: 0 });
+      }
+      // dragstart preventDefault'ed: the page vetoed the native drag — stay pointer
+    }
+  }
+  if (d.native) {
+    fireDrag(d.native, 'drag', d.dt, p.x, p.y);
+    const over = hitTest(p.x, p.y);
+    if (over !== d.over) {
+      if (over) fireDrag(over, 'dragenter', d.dt, p.x, p.y);
+      if (d.over) fireDrag(d.over, 'dragleave', d.dt, p.x, p.y);
+      d.over = over;
+      d.canDrop = false;
+    }
+    if (over) d.canDrop = fireDrag(over, 'dragover', d.dt, p.x, p.y);
+  } else if (d.capture) {
+    fireMouse(d.capture, 'pointermove', { x: p.x, y: p.y });
+    fireMouse(d.capture, 'mousemove', { x: p.x, y: p.y });
+  }
+  // no capture, not native: applyPreviewHover's per-tick move already tracks
+  // the pointer, with buttons riding pressedButtons
+}
+
+function releaseGesture(d, p) {
+  pressedButtons = 0;
+  if (d.native) {
+    if (d.over && d.canDrop) fireDrag(d.over, 'drop', d.dt, p.x, p.y);
+    else if (d.over) fireDrag(d.over, 'dragleave', d.dt, p.x, p.y);
+    fireDrag(d.native, 'dragend', d.dt, p.x, p.y);
+    return;
+  }
+  const el = d.capture || hitTest(p.x, p.y);
+  if (el) {
+    fireMouse(el, 'pointerup', { x: p.x, y: p.y, buttons: 0 });
+    fireMouse(el, 'mouseup', { x: p.x, y: p.y, buttons: 0 });
+  }
+  if (d.capture) {
+    try { d.capture.releasePointerCapture(1); } catch (e) {}
+    fireMouse(d.capture, 'lostpointercapture', { x: p.x, y: p.y, buttons: 0 });
+  }
+  // never left the slop: a click, aimed where the press landed — real clicks
+  // target the mousedown element
+  if (!d.dragging && d.source) fireMouse(d.source, 'click', { x: d.x0, y: d.y0, buttons: 0 });
+}
+
+/**
+ * A preview stopped mid-press must not leave the page thinking the button is
+ * still held — cancel the way the browser cancels an interrupted pointer.
+ */
+function abortGesture(d) {
+  pressedButtons = 0;
+  if (d.native) {
+    if (d.over) fireDrag(d.over, 'dragleave', d.dt, d.x, d.y);
+    fireDrag(d.native, 'dragend', d.dt, d.x, d.y);
+    return;
+  }
+  const el = d.capture || d.source;
+  if (!el) return;
+  fireMouse(el, 'pointercancel', { x: d.x, y: d.y, buttons: 0 });
+  fireMouse(el, 'pointerup', { x: d.x, y: d.y, buttons: 0 });
+  fireMouse(el, 'mouseup', { x: d.x, y: d.y, buttons: 0 });
+  if (d.capture) {
+    try { d.capture.releasePointerCapture(1); } catch (e) {}
+    fireMouse(d.capture, 'lostpointercapture', { x: d.x, y: d.y, buttons: 0 });
+  }
+}
+
+/** Drive recorded presses as playback crosses them. `pv.gest` = { idx, active }. */
+function applyPreviewGestures(pv, t) {
+  const st = pv.gest;
+  const gs = pv.geo.gestures;
+  for (;;) {
+    if (st.active) {
+      const d = st.active;
+      if (t < d.g.tUp) { moveGesture(d, G.pointerAt(d.g.rec, t - d.g.recT0)); return; }
+      const up = G.pointerAt(d.g.rec, d.g.tUp - d.g.recT0);
+      moveGesture(d, up); // land the pointer (and the drop target's dragover) first
+      releaseGesture(d, up);
+      st.active = null;
+      continue; // the next press may be due in this same tick
+    }
+    const g = gs[st.idx];
+    if (!g || t < g.tDown) return;
+    st.idx++;
+    st.active = pressGesture(g);
+  }
 }
 
 /** What should be hovered at time t: the last hover before t, ended by any later interaction. */
@@ -716,7 +902,8 @@ function applyPreviewHover(geo, t) {
 function buildGeometry(steps) {
   const segs = [];   // { t0, t1, from, to, easeFn, idx } — holds are from===to; idx = source step
   const pointerEvents = []; // { t, anchor|null } — hover starts / hover-ending interactions
-  const clicks = []; // { t, target } (click steps) or { t, x, y } (recorded) — fired once as playback crosses them
+  const clicks = []; // { t, target } — click steps, fired once as playback crosses them
+  const gestures = []; // { tDown, tUp, rec, recT0 } — recorded presses, for the gesture machine
   let t = 0;
   let y = 0;
   const errors = [];
@@ -767,25 +954,28 @@ function buildGeometry(steps) {
       // The recorded scroll replays, a cursor dot traces the pointer, and the
       // point under it is hover-emulated per tick (hit-tested live — see
       // applyPreviewHover), all via the same gesture core the renderer
-      // resolves with. A recorded down→up that barely travels is a click —
-      // emulated in playback exactly like a click step, but hit-tested at the
-      // recorded pointer position (a recording captures where, not what), so
-      // a click that routes client-side routes in the preview too. Travel
-      // between the edges is a drag, which stays render-only: no synthetic
-      // sequence reproduces one. The null pointer event ends any earlier
-      // hover step's hover, and stands after the recording too — the render
-      // parks the pointer there.
+      // resolves with. Each recorded press becomes a gesture the machine
+      // replays in playback (never on scrub), hit-tested at the recorded
+      // pointer position (a recording captures where, not what): a stationary
+      // down→up lands as a click — so one that routes client-side routes in
+      // the preview too — and travel becomes a synthetic drag, pointer-
+      // listener or native HTML5 (see the gesture machine above). The null
+      // pointer event ends any earlier hover step's hover, and stands after
+      // the recording too — the render parks the pointer there.
       pointerEvents.push({ t, anchor: null });
       const edges = step.buttons || [];
       if (edges.length) sawInteraction = true;
-      for (let b = 0; b + 1 < edges.length; b++) {
-        if (edges[b].action !== 'down' || edges[b + 1].action !== 'up') continue;
-        const down = G.pointerAt(step, edges[b].t / 1000);
-        const up = G.pointerAt(step, edges[b + 1].t / 1000);
-        if (Math.hypot(up.x - down.x, up.y - down.y) > 8) continue;
-        // fires at the up edge (a click completes on release), aimed where
-        // the press landed — real clicks target the mousedown element
-        clicks.push({ t: t + edges[b + 1].t / 1000, x: down.x, y: down.y });
+      for (let b = 0; b < edges.length; b++) {
+        if (edges[b].action !== 'down') continue;
+        const up = edges[b + 1] && edges[b + 1].action === 'up' ? edges[b + 1] : null;
+        // a press never released rides to the recording's end (ESC mid-drag)
+        gestures.push({
+          tDown: t + edges[b].t / 1000,
+          tUp: t + (up ? up.t / 1000 : G.durationSec(step)),
+          rec: step,
+          recT0: t,
+        });
+        if (up) b++;
       }
       const dur = G.durationSec(step);
       segs.push({ t0: t, t1: t + dur, from: y, to: null, easeFn: null, idx: i, rec: step });
@@ -807,7 +997,7 @@ function buildGeometry(steps) {
     }
     // wait: not executable yet — previewed as nothing, same as render
   }
-  return { segments: segs, total: t, errors, pointerEvents, clicks };
+  return { segments: segs, total: t, errors, pointerEvents, clicks, gestures };
 }
 
 function offsetAt(geo, tSec) {
@@ -868,21 +1058,38 @@ function resolveDeferred(geo, t) {
       if (g.from === g.to) { g.from = g.to = yNow; }
       else { g.from = yNow; yNow = g.to; }
     }
+    // timed events belonging to later steps shift with their segments —
+    // recorded presses included, or they'd fire at stale times
+    const after = s.t1 - delta; // the span's pre-resolution end
+    for (const c of geo.clicks) if (c.t >= after - 1e-9) c.t += delta;
+    for (const pe of geo.pointerEvents) if (pe.t >= after - 1e-9) pe.t += delta;
+    for (const ge of geo.gestures) {
+      if (ge.tDown >= after - 1e-9) { ge.tDown += delta; ge.tUp += delta; ge.recT0 += delta; }
+    }
     geo.total += delta;
   }
 }
 
-/** Trace the recorded pointer with the dot while t is inside a record segment. */
+/** Trace the recorded pointer with the dot while t is inside a record segment.
+ *  settings.cursorFade (seconds, 0 = off) ramps its opacity in after the dot
+ *  appears and out before it disappears — anchored to the same appear and
+ *  disappear moments the dot already has, mirroring what the render does to
+ *  its sprite. Clamped to half the segment so the ramps never cross. */
 function updatePreviewCursor(geo, tSec) {
   if (!els.previewCursor) return;
   const t = Math.max(0, Math.min(tSec, geo.total));
   for (const s of geo.segments) {
     if (s.rec && t >= s.t0 && t <= s.t1) {
       const p = G.pointerAt(s.rec, t - s.t0);
+      els.previewCursor.className = 'preview-cursor' + (p.down ? ' down' : '');
       const st = els.previewCursor.style;
       st.display = 'block';
       st.left = p.x + 'px';
       st.top = p.y + 'px';
+      const fade = Math.min(settings.cursorFade || 0, (s.t1 - s.t0) / 2);
+      st.opacity = fade > 0
+        ? String(Math.max(0, Math.min(1, (t - s.t0) / fade, (s.t1 - t) / fade)))
+        : '';
       return;
     }
   }
@@ -906,15 +1113,21 @@ function play(steps, fromSec) {
   if (!geo.segments.length) { emit('preview:error', { errors: geo.errors }); return null; }
   const from = fromSec > 0 ? Math.min(fromSec, geo.total) : 0;
   const fired = new Set();
+  let gestIdx = 0;
   let holdZeroUntil = 0;
   if (from > 0) {
     geo.clicks.forEach((c, i) => { if (c.t <= from) fired.add(i); });
+    // presses already begun are unresumable mid-hold — skip them whole
+    while (geo.gestures[gestIdx] && geo.gestures[gestIdx].tDown < from) gestIdx++;
     for (const s of geo.segments) {
       // a deferred move resumes by resolving on the destination instead
       if (!s.rec && !s.defer && from > s.t0 && from <= s.t1) { holdZeroUntil = s.t1; break; }
     }
   }
-  preview = { geo, startWall: performance.now(), offsetSec: from, playing: true, raf: 0, fired };
+  preview = {
+    geo, startWall: performance.now(), offsetSec: from, playing: true, raf: 0, fired,
+    gest: { idx: gestIdx, active: null },
+  };
   if (els.shield) els.shield.style.display = 'block';
   const tick = () => {
     if (!preview || !preview.playing) return;
@@ -926,7 +1139,11 @@ function play(steps, fromSec) {
     preview.geo.clicks.forEach((c, i) => {
       if (c.t <= t && !preview.fired.has(i)) { preview.fired.add(i); firePreviewClick(c); }
     });
-    applyPreviewHover(preview.geo, t);
+    applyPreviewGestures(preview, t);
+    // a native drag suppresses mouse/hover events, as the real protocol does;
+    // a captured pointer gets its moves from the machine, aimed at the capture
+    const drag = preview.gest.active;
+    if (!drag || (!drag.native && !drag.capture)) applyPreviewHover(preview.geo, t);
     updatePreviewCursor(preview.geo, t);
     emit('preview:time', { t, total: preview.geo.total });
     if (t >= preview.geo.total) {
@@ -952,8 +1169,12 @@ function seek(steps, tSec) {
 }
 
 function stopPreview(keepHover) {
-  if (preview && preview.raf) cancelAnimationFrame(preview.raf);
+  if (preview) {
+    if (preview.raf) cancelAnimationFrame(preview.raf);
+    if (preview.gest && preview.gest.active) abortGesture(preview.gest.active);
+  }
   preview = null;
+  pressedButtons = 0;
   if (els.shield) els.shield.style.display = 'none';
   if (els.previewCursor) els.previewCursor.style.display = 'none';
   if (!keepHover) setPreviewHover(null);

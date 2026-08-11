@@ -96,6 +96,17 @@ export type Step =
       /** Sparse left-button edges, chronological; the first must be 'down'. */
       buttons?: Array<{ t: number; action: 'down' | 'up' }>;
       /**
+       * Opt-in cursor smoothing: resolve the pointer path through a zero-phase
+       * Gaussian kernel instead of replaying the raw samples verbatim. `true`
+       * means strength 0.5; `strength` 0..1 scales the kernel width. The path
+       * is pinned to the raw positions at button edges and the take's ends, so
+       * clicks and drag grab/release points land exactly where recorded; the
+       * route BETWEEN them (drags included) is smoothed, so what the render
+       * hovers or drags through can differ slightly from the live capture.
+       * Absent/false = verbatim replay. Scroll is never smoothed.
+       */
+      smoothing?: boolean | { mode?: 'denoise'; strength?: number };
+      /**
        * The viewport this was recorded at. A render at a different size is
        * refused: breakpoints make it a different page, so the recorded
        * coordinates and scroll offsets would land on the wrong things.
@@ -203,12 +214,25 @@ export type Config = {
      * inside the *rendered* sprite where the pointer tip sits — default
      * [0, 0], the top-left corner. `size` is the rendered width in CSS px,
      * height keeping the image's aspect — default 32.
+     *
+     * `fade` is how many seconds the sprite fades in when it appears and out
+     * before it disappears, instead of popping. Default 0 (no fade). It
+     * applies in every mode: alone (`{ fade: 0.3 }` fades the built-in
+     * arrow), with `auto`, or with `image`. `tip` describes a replacement
+     * sprite and requires `image`.
      */
     cursor?:
       | boolean
-      | { auto: true; image?: never; tip?: never; size?: number }
-      | { image: string; auto?: never; tip?: [number, number]; size?: number };
+      | { auto: true; image?: never; tip?: never; size?: number; fade?: number }
+      | { image?: string; auto?: never; tip?: [number, number]; size?: number; fade?: number };
     video?: VideoMode;
+    /**
+     * Same modes, applied to provider embeds (YouTube/Vimeo iframes), driven
+     * through their postMessage player APIs — best-effort and keyframe-coarse,
+     * unlike the frame-exact native <video> path. Defaults to `video`'s value.
+     * 'sync' embeds force jobs=1 (provider seeks buffer per worker).
+     */
+    embeds?: VideoMode;
     /** Extra CSS injected before the page's own scripts run. */
     css?: string;
     /** Extra JS injected before the page's own scripts run. */
@@ -295,13 +319,15 @@ export type Resolved = {
      * Otherwise one fixed sprite: the built-in arrow when `image` is null,
      * else an image URL (local files became data: URIs at config time).
      * tipX/tipY are the px inside the rendered sprite where the pointer tip
-     * sits; size is the rendered width in CSS px.
+     * sits; size is the rendered width in CSS px. fade is the
+     * appear/disappear fade in seconds, 0 = pop; it applies in both modes.
      */
     cursor:
       | false
-      | { image: string | null; auto?: never; tipX: number; tipY: number; size: number }
-      | { auto: Record<string, { url: string; tipX: number; tipY: number; size: number }>; image?: never };
+      | { image: string | null; auto?: never; tipX: number; tipY: number; size: number; fade: number }
+      | { auto: Record<string, { url: string; tipX: number; tipY: number; size: number }>; image?: never; fade: number };
     video: VideoMode;
+    embeds: VideoMode;
     css: string;
     script: string;
     settle: number;

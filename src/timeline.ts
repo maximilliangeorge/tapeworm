@@ -299,6 +299,57 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
 }
 
 /**
+ * Per-frame opacity for the drawn cursor sprite, so it fades in when it
+ * appears and out before it disappears instead of popping. Everything is a
+ * pure function of the frame index — the core invariant — so it first replays
+ * the capture loop's own show/hide rule (render.ts): the sprite appears on a
+ * recorded-pointer frame, survives frames that hold the offset it parked at
+ * (a record step's hold), and disappears the moment the scroll moves off it
+ * (or goes free), with an interaction re-parking the pointer at the offset it
+ * fired AT. Each visible run then ramps 0→1 over its first `fadeSec` and, when
+ * it actually ends on camera (not at the last frame), 1→0 into the frame where
+ * the sprite vanishes; short runs shrink both ramps to half the run so they
+ * never cross. Frames where the sprite is hidden are 0.
+ */
+export function cursorAlphas(track: Track, fps: number, fadeSec: number): number[] {
+  const total = track.offsets.length;
+  const actionAt = new Map<number, number>();
+  for (const a of track.actions) actionAt.set(a.frame, a.at);
+
+  const visible = new Array<boolean>(total);
+  let pointerAt: number | null = null;
+  let shown = false;
+  for (let n = 0; n < total; n++) {
+    if (actionAt.has(n)) pointerAt = actionAt.get(n)!;
+    const y = track.offsets[n];
+    if (track.pointer[n]) {
+      pointerAt = y;
+      shown = true;
+    } else if (pointerAt !== null && (Number.isNaN(y) || y !== pointerAt)) {
+      pointerAt = null;
+      shown = false;
+    }
+    visible[n] = shown;
+  }
+
+  const alphas = new Array<number>(total).fill(0);
+  const fadeFrames = Math.round(fadeSec * fps);
+  for (let a = 0; a < total; a++) {
+    if (!visible[a]) continue;
+    let b = a;
+    while (b < total && visible[b]) b++;
+    const f = Math.min(fadeFrames, Math.floor((b - a) / 2));
+    for (let n = a; n < b; n++) {
+      let alpha = f > 0 ? Math.min(1, (n - a + 1) / (f + 1)) : 1;
+      if (f > 0 && b < total) alpha = Math.min(alpha, (b - n) / (f + 1));
+      alphas[n] = alpha;
+    }
+    a = b;
+  }
+  return alphas;
+}
+
+/**
  * Peak per-frame displacement, in device pixels. Above roughly 30 device px the
  * motion starts reading as strobing rather than movement — worth warning about
  * because it's invisible until you watch the render.

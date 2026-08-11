@@ -39,6 +39,8 @@ OPTIONS
       --auto             discover sections instead of using the config timeline
       --sections <n>     how many sections --auto should visit, default 6
       --video <mode>     sync | freeze | ignore, default sync
+      --embeds <mode>    sync | freeze | ignore for YouTube/Vimeo iframes,
+                         default: follows --video
       --clock <mode>     virtual | real, default virtual
       --cursor <c>       replace the drawn gesture cursor. "auto" draws the
                          bundled macOS set, switching per frame with the CSS
@@ -51,6 +53,8 @@ OPTIONS
                          arrow's width — the other cursors keep macOS's
                          relative proportions. Config page.cursor also sets
                          an image sprite's tip point.
+      --cursor-fade <s>  fade the drawn cursor in/out over this many seconds
+                         where it appears and disappears, default 0 (no fade)
       --prewarm <mode>   full | cache | none, default full
                          full  = load everything first, then film a clean pass
                          cache = warm the cache, reload, film reveals as they happen
@@ -80,7 +84,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const flags: Flags = {};
   const takesValue = new Set([
     'out', 'o', 'fps', 'width', 'height', 'dpr', 'crf', 'jobs', 'j',
-    'sections', 'video', 'clock', 'cursor', 'cursor-size', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
+    'sections', 'video', 'embeds', 'clock', 'cursor', 'cursor-size', 'cursor-fade', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -198,6 +202,11 @@ async function main(): Promise<void> {
     if (!['sync', 'freeze', 'ignore'].includes(videoMode)) fail(`--video must be sync, freeze or ignore`);
     config.page = { ...config.page, video: videoMode as VideoMode };
   }
+  const embedsMode = str(flags, 'embeds');
+  if (embedsMode) {
+    if (!['sync', 'freeze', 'ignore'].includes(embedsMode)) fail(`--embeds must be sync, freeze or ignore`);
+    config.page = { ...config.page, embeds: embedsMode as VideoMode };
+  }
   const clock = str(flags, 'clock');
   if (clock) {
     if (!['virtual', 'real'].includes(clock)) fail('--clock must be virtual or real');
@@ -214,9 +223,18 @@ async function main(): Promise<void> {
   if (cursorSize !== undefined) {
     const cur = config.page?.cursor;
     if (typeof cur !== 'object' || cur === null) {
-      fail('--cursor-size needs a sprite to size — pass --cursor <preset or image>, or set page.cursor in the config');
+      fail('--cursor-size needs a sprite to size — pass --cursor <auto or image>, or set page.cursor in the config');
     }
     config.page = { ...config.page, cursor: { ...cur, size: cursorSize } };
+  }
+  const cursorFade = num(flags, 'cursor-fade');
+  if (cursorFade !== undefined) {
+    // Merge with whatever --cursor / the config already chose; a cursor
+    // switched off stays off.
+    const cur = config.page?.cursor;
+    if (cur !== false) {
+      config.page = { ...config.page, cursor: { ...(typeof cur === 'object' ? cur : {}), fade: cursorFade } };
+    }
   }
   const settle = num(flags, 'settle');
   if (settle !== undefined) config.page = { ...config.page, settle };

@@ -20,7 +20,76 @@ and the project uses [Semantic Versioning](https://semver.org/).
   back to the arrow. Each cursor renders at its natural macOS size with its
   own hotspot; `size` rescales the whole set, stated as the arrow's width.
   From the CLI: `--cursor auto` and the new `--cursor-size <px>` (which also
-  sizes a custom `image` sprite).
+  sizes a custom `image` sprite). Composes with `page.cursor.fade`.
+
+- **Cursor fade.** Opt-in: the drawn gesture cursor can fade in where it
+  appears and out where it disappears instead of popping — `page.cursor.fade`
+  (seconds; works with or without a replacement `image`), `--cursor-fade` on
+  the CLI, and a **Cursor fade** setting in the extension, whose preview dot
+  fades the same way and whose exported config carries the value. Default 0 —
+  no fade, exactly the old behaviour. Timings don't shift: the fade-out ends
+  on the frame the sprite used to vanish on, and the opacity is a pure
+  function of the frame index, keeping renders deterministic.
+
+- **Page-commanded pauses on Vimeo embeds are honored.** In sync mode, when
+  the page's own code calls `player.pause()` during the render — a scripted
+  click on a pause button, a pause-on-scroll or visibility handler — the
+  embed now freezes on the frame it stopped at instead of being overridden by
+  the embed control. A single synthetic `pause` event flips the page's UI
+  (the already-paused player emits none for a no-op pause), the `timeupdate`
+  stream goes quiet, and a later `player.play()` resumes from the paused-at
+  time; a scrub while paused moves the resume point. Detected by counting
+  tapeworm's own pause commands against the player's method acks — an
+  unmatched pause ack is the page's. Vimeo only: YouTube's widget protocol
+  has no per-command acks, so page pauses there stay invisible.
+
+- **Cursor smoothing (opt-in).** A `record` step now takes
+  `"smoothing": true` or `{ "mode": "denoise", "strength": 0..1 }`: the
+  recorded pointer path is resolved through a zero-phase Gaussian kernel, so
+  hand tremor and capture stairsteps disappear while the route and timing stay
+  yours. The path is pinned to the raw positions at button edges and the
+  take's ends — clicks and a drag's grab/release land exactly where recorded;
+  the route between them (drags included) is smoothed, so the dispatched
+  hover/drag path can differ slightly from the live capture. Scroll is never
+  smoothed, and the default remains verbatim replay. The extension's
+  record-step editor gains the matching off/light/medium/strong control, and
+  its preview plays the smoothed path.
+
+- **Embed control.** YouTube and Vimeo iframes no longer free-run (and so play
+  visibly too fast) in the output: tapeworm now drives them through their
+  postMessage player APIs — paused, muted, and seeked to each frame's
+  timestamp. New `page.embeds` / `--embeds` takes the same
+  `sync | freeze | ignore` modes as `page.video` and defaults to following it.
+  Provider seeks are keyframe-coarse and best-effort, so sync-mode embeds
+  force `--jobs 1` (the render notes it); the pre-render probe reports embeds
+  that can't be controlled — unknown providers, dead handshakes — which
+  free-run as before. YouTube embeds get `enablejsapi=1` added to their src at
+  discovery. The pre-render probe also notes an embed shorter than the
+  timeline — it holds its last frame from its duration on, which otherwise
+  looks like the render breaking halfway through.
+
+- **Vimeo SDK `timeupdate` events keep flowing while an embed is driven.** A
+  paused Vimeo player never emits the `timeupdate` stream a playing one does,
+  so page UI wired to `player.on('timeupdate', …)` (custom scrubbers, chapter
+  highlights) froze at 0 under embed control. In sync mode tapeworm now
+  re-broadcasts each frame's timestamp as the player's own `timeupdate`
+  message — correct origin and source, so the SDK's checks pass — and the UI
+  tracks the render timeline. Past the embed's duration the stream pins one
+  final `timeupdate` at `percent: 1` and goes quiet, as a finished player
+  would. Each embed gets a birth time: one that mounts mid-render (a
+  click-opened overlay player) is seeked from its own zero rather than the
+  render's global clock, so it plays from its start instead of beginning
+  midway — or frozen past its end. A `play` event leads the stream, so a
+  page's play/pause button shows the playing state instead of reading the real
+  `pause` that tapeworm's autoplay defense provokes and sitting on the wrong
+  icon for the whole render; it is restated whenever the player emits a real
+  `pause`. That means a page's own `play` handler runs during a render
+  (analytics, pause-other-players logic) — `freeze` or `ignore` if that
+  matters. `pause`, `ended` and `cuepoint` are deliberately not faked —
+  `ended` in particular makes pages close their player on camera (rationale in
+  `src/embeds-core.js`). YouTube
+  pages need no equivalent: the widget already updates every registered page
+  listener on each seek.
 
 - **Saved timelines.** The extension now persists recordings: 🗂 in the panel
   footer snapshots the current timeline into a per-site library — the current
@@ -37,8 +106,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   `page.substitute` rules. Collected passively via Resource Timing, so the
   extension still needs no permissions beyond `activeTab`.
 
-- **iPad Pro viewport preset.** The extension's viewport preset list now
-  includes iPad Pro 1366×1024 (landscape).
+- **iPad Pro viewport presets.** The extension's viewport preset list now
+  includes iPad Pro in both orientations — portrait 1024×1366 and landscape
+  1366×1024.
 
 - **Replaceable cursor sprite.** `page.cursor` now also accepts
   `{ image, tip?, size? }` to draw your own sprite during recorded-gesture
@@ -76,8 +146,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
   Raw samples stay in the config so future smoothing can re-resolve them
   without re-recording (resolution lives in `shared/gesture-core.js`,
   currently linear interpolation). The extension preview replays a
-  recording's scroll, traces a cursor dot, and emulates the hover under it
-  (untrusted, like hover steps); click and drag effects are render-only.
+  recording's scroll, traces a cursor dot (filled while the button is held),
+  and emulates the hover, clicks and drags under it with synthetic events
+  (untrusted, like hover steps): pointer-listener drags replay with the
+  button held — aimed at the capturing element when the page took
+  `setPointerCapture` — and a `draggable="true"` source replays as native
+  HTML5 drag-and-drop (dragstart → dragenter/dragover → drop where accepted →
+  dragend, with a real `DataTransfer`). Widgets that require `isTrusted`
+  input respond only in the render.
 
 - Extension: timeline steps can be **dragged to reorder** via a ⠿ grip on each
   row — the rows part to show where the step will land. The start step stays
@@ -171,6 +247,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Extension: **the pinned starting URL is now read from the page at the moment
+  the first keyframe or recording is created**, not from the panel's cached
+  copy of the URL it attached on. On single-page sites, browsing to another
+  route before picking the first keyframe used to pin the route the panel was
+  opened on (client-side navigations never re-announce the page), exporting a
+  config that started in the wrong place. Pick and record events now carry the
+  page's live URL — a recording pins the page it *started* on. The start
+  step's editor also gains a **⌖ Pin this page** button that resets the
+  starting URL to wherever the tab is now.
+
 - Extension: **Scroll-to steps on the far side of a navigation now preview.**
   A move step whose anchor only exists on the page a preceding click
   navigates to was silently dropped from the preview geometry — its selector
@@ -230,7 +316,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - The router's **page transition stays in the video**. During capture, a
   navigating click returns immediately instead of waiting the new view in: the
   transition plays across the settle frames, driven per-frame by the virtual
-  clock like any other animation a click starts. Those frames are *free* — the
+  clock like any other animation a click starts. Those frames are _free_ — the
   page owns the scroll while the router swaps views (the outgoing view stays at
   the click offset; the router jumps to top at mount), so no offset is imposed
   and no scroll drift is reported there. When the click has no explicit
@@ -240,7 +326,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 - A navigating click is now replayed from the scroll offset it was authored at.
   The track pinned each interaction to a frame only, and the capture pass fired
-  it from *that frame's* offset — but a navigating click puts its own frame at
+  it from _that frame's_ offset — but a navigating click puts its own frame at
   the top of the destination, so the click was dispatched at scroll 0 on the
   page it was supposed to be leaving. It landed on whichever element sat there,
   and the render was a convincing video of the wrong thing. Interactions now

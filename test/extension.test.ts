@@ -80,7 +80,7 @@ function fakeEl(): any {
   el.appendChild = (c: unknown) => { el.children.push(c); return c; };
   el.append = (...cs: unknown[]) => { el.children.push(...cs); };
   el.remove = () => { el.__removed = true; };
-  el.attachShadow = () => fakeEl();
+  el.attachShadow = () => (el.__shadow ??= fakeEl()); // kept reachable so tests can inspect overlay elements
   return el;
 }
 
@@ -177,6 +177,49 @@ test('overlay seek lands the same offsets the renderer would', () => {
   assert.equal(w.scrollY, 2000);
   O.seek(steps, 99);
   assert.equal(w.scrollY, 4000, 'clamped to the end');
+});
+
+test('preview cursor dot fades in/out with settings.cursorFade, and stays opaque without it', () => {
+  const w = bootOverlay();
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, cursorFade: 0.5 });
+  const steps = [
+    { type: 'start', at: 'top', hold: 1 },
+    {
+      type: 'record',
+      samples: { t: [0, 2000], x: [100, 300], y: [50, 70], s: [0, 100] },
+      buttons: [],
+      viewport: { width: 1000, height: 700, dpr: 2 },
+      hold: 1, // so "past the recording" below is inside the timeline, not clamped onto its end
+    },
+  ];
+  // the overlay lives in a closed shadow root — the harness keeps it reachable
+  const host = w.document.documentElement.children.find((c: any) => c.__shadow);
+  const dot = host.__shadow.children.find((c: any) => c.className === 'preview-cursor');
+
+  O.seek(steps, 0.5); // mid-start-hold: before the recording, dot hidden
+  assert.equal(dot.style.display, 'none');
+
+  O.seek(steps, 1.1); // 0.1s into the recording, fade 0.5 → 20% opaque
+  assert.equal(dot.style.display, 'block');
+  assert.ok(Math.abs(Number(dot.style.opacity) - 0.2) < 1e-9, `fading in, got ${dot.style.opacity}`);
+
+  O.seek(steps, 2.0); // middle: fully opaque, tracing the recorded pointer
+  assert.equal(dot.style.opacity, '1');
+  assert.equal(dot.style.left, '200px');
+  assert.equal(dot.style.top, '60px');
+
+  O.seek(steps, 2.9); // 0.1s before the recording ends → 20% again
+  assert.ok(Math.abs(Number(dot.style.opacity) - 0.2) < 1e-9, `fading out, got ${dot.style.opacity}`);
+
+  O.seek(steps, 3.5); // past the recording: hidden again
+  assert.equal(dot.style.display, 'none');
+
+  // opt-out: no cursorFade → the stylesheet's full opacity, no inline override
+  O.setSettings({ cursorFade: 0 });
+  O.seek(steps, 1.05);
+  assert.equal(dot.style.opacity, '', 'no fade: opacity left alone');
 });
 
 test('preview emulates hover: marker class applied at hover time, cleared by later interactions', () => {
@@ -288,6 +331,7 @@ test('record mode: real input is sampled per display frame, ESC finishes with on
   assert.deepEqual(plain(d.buttons), [{ t: 100, action: 'down' }, { t: 150, action: 'up' }]);
   assert.deepEqual(plain(d.viewport), { width: 1000, height: 700, dpr: 2 }, 'the ACTUAL window, honestly stamped');
   assert.equal(d.durationMs, 200);
+  assert.equal(d.url, 'https://example.com/', 'the take carries the page it was recorded on');
 
   // listeners are gone: further input goes nowhere
   w.__dispatch('pointermove', { clientX: 999, clientY: 999 });
@@ -355,6 +399,7 @@ test('a navigation mid-recording splits the take at the last click: record + cli
     anchor: { selector: '#cta', fallbackText: 'Read more' },
     quality: 'id',
   });
+  assert.equal(d.url, 'https://example.com/', 'the split still knows the page the take began on');
 
   // the recording is fully torn down: further input goes nowhere
   w.__dispatch('pointermove', { clientX: 999, clientY: 999 });
@@ -544,7 +589,7 @@ test('recorded hover raises the events a real pointer would: pointer + mouse, ch
   );
 });
 
-test('preview fires a recorded click at the recorded spot — once, in playback only; drags stay render-only', () => {
+test('preview fires a recorded click at the recorded spot — once, in playback only; travel is a drag, not a click', () => {
   const fired: string[] = [];
   const btn: any = {
     nodeType: 1,
@@ -586,17 +631,123 @@ test('preview fires a recorded click at the recorded spot — once, in playback 
   assert.equal(fired.filter((f) => f.startsWith('click')).length, 1, 'fired exactly once');
   O.stopPreview();
 
-  // a down→up with real pointer travel is a drag — no synthetic sequence reproduces one
+  // a down→up with real pointer travel is a drag: pressed where the press
+  // landed, per-tick moves, released at the release point — and NO click
   fired.length = 0;
   const drag = {
     ...rec,
     samples: { t: [0, 1000, 2000], x: [100, 300, 300], y: [50, 50, 50], s: [0, 0, 0] },
-    buttons: [{ t: 100, action: 'down' }, { t: 900, action: 'up' }], // x 120 → 280
+    buttons: [{ t: 500, action: 'down' }, { t: 900, action: 'up' }], // x 200 → 280
   };
   w.__setNow(0);
   O.play([{ type: 'start', at: 'top', hold: 1 }, drag]);
-  w.__setNow(2900); w.__pumpRaf();
-  assert.ok(!fired.some((f) => f.startsWith('click')), 'drags are render-only: ' + fired);
+  w.__setNow(1600); w.__pumpRaf(); // t=1.6 — mid-drag
+  w.__setNow(2900); w.__pumpRaf(); // past the release
+  assert.ok(fired.includes('pointerdown@200') && fired.includes('mousedown@200'),
+    'pressed where the press landed: ' + fired);
+  assert.ok(fired.includes('pointerup@280') && fired.includes('mouseup@280'),
+    'released at the release point: ' + fired);
+  assert.ok(!fired.some((f) => f.startsWith('click')), 'a drag is not a click: ' + fired);
+  O.stopPreview();
+});
+
+test('preview replays a recorded drag natively when the source is draggable: dragstart → dragover → drop → dragend', () => {
+  const fired: string[] = [];
+  const mk = (name: string, cancels: string[] = []): any => ({
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+    dispatchEvent: (e: any) => {
+      fired.push(name + ':' + e.type + '@' + Math.round(e.clientX));
+      return !cancels.includes(e.type); // false = preventDefault, as the DOM reports it
+    },
+  });
+  const card = mk('card');
+  card.closest = (sel: string) => (sel === '[draggable="true"]' ? card : null);
+  const zone = mk('zone', ['dragover', 'drop']); // a drop target accepts by cancelling dragover
+  const w = bootOverlay();
+  w.document.elementFromPoint = (x: number) => (x < 200 ? card : zone);
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+
+  // 2s recording: pointer x 100→300, held from t=0.1 to t=1.9 — a drag from
+  // the card (x<200) onto the zone
+  const rec = {
+    type: 'record',
+    samples: { t: [0, 1000, 2000], x: [100, 300, 300], y: [50, 50, 50], s: [0, 0, 0] },
+    viewport: { width: 1000, height: 700, dpr: 2 },
+    buttons: [{ t: 100, action: 'down' }, { t: 1900, action: 'up' }],
+  };
+  w.__setNow(0);
+  O.play([{ type: 'start', at: 'top', hold: 1 }, rec]);
+  w.__setNow(1200); w.__pumpRaf(); // t=1.2 — pressed at x=120, past the slop at x=140: dragstart
+  assert.ok(fired.some((f) => f.startsWith('card:pointerdown@120')), 'pressed on the card: ' + fired);
+  assert.ok(fired.some((f) => f.startsWith('card:dragstart')), 'native drag started: ' + fired);
+  w.__setNow(1600); w.__pumpRaf(); // t=1.6 — x=220, over the zone
+  assert.ok(fired.includes('zone:dragenter@220'), 'entered the drop target: ' + fired);
+  assert.ok(fired.includes('card:dragleave@220'), 'left the source: ' + fired);
+  assert.ok(fired.includes('zone:dragover@220'), 'dragover flows per tick: ' + fired);
+  w.__setNow(3000); w.__pumpRaf(); // past the release at t=2.9
+  assert.ok(fired.includes('zone:drop@300'), 'dropped where dragover was accepted: ' + fired);
+  assert.ok(fired.includes('card:dragend@300'), 'dragend on the source, always: ' + fired);
+  assert.ok(!fired.some((f) => f.includes(':click')), 'a drag is not a click: ' + fired);
+  assert.ok(
+    fired.indexOf('card:dragstart@140') < fired.indexOf('zone:dragenter@220') &&
+    fired.indexOf('zone:dragenter@220') < fired.indexOf('zone:drop@300') &&
+    fired.indexOf('zone:drop@300') < fired.indexOf('card:dragend@300'),
+    'the native protocol order holds: ' + fired,
+  );
+  O.stopPreview();
+});
+
+test('a page that captures the pointer on pointerdown keeps recorded drag moves aimed at the capturer', () => {
+  const fired: string[] = [];
+  let captured = false;
+  const knob: any = {
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+    dispatchEvent: (e: any) => {
+      fired.push('knob:' + e.type + '@' + Math.round(e.clientX));
+      // a slider library grabs the pointer in its pointerdown handler;
+      // pointerId 1 is the real mouse, so the grab takes
+      if (e.type === 'pointerdown') captured = true;
+      return true;
+    },
+    hasPointerCapture: (id: number) => captured && id === 1,
+    releasePointerCapture: () => { captured = false; },
+  };
+  const other: any = {
+    nodeType: 1,
+    parentElement: null,
+    classList: { add: () => {}, remove: () => {} },
+    getBoundingClientRect: () => ({ left: 200, top: 0, width: 400, height: 100 }),
+    dispatchEvent: (e: any) => fired.push('other:' + e.type),
+  };
+  const w = bootOverlay();
+  w.document.elementFromPoint = (x: number) => (x < 200 ? knob : other);
+  const O = w.TapewormOverlay;
+  O.mount(() => {});
+  O.setSettings({ width: 1000, height: 700, dpr: 2, fps: 60 });
+
+  const rec = {
+    type: 'record',
+    samples: { t: [0, 1000, 2000], x: [100, 300, 300], y: [50, 50, 50], s: [0, 0, 0] },
+    viewport: { width: 1000, height: 700, dpr: 2 },
+    buttons: [{ t: 100, action: 'down' }, { t: 1900, action: 'up' }],
+  };
+  w.__setNow(0);
+  O.play([{ type: 'start', at: 'top', hold: 1 }, rec]);
+  w.__setNow(1600); w.__pumpRaf(); // t=1.6 — x=220: over `other`, but the knob holds capture
+  assert.ok(fired.includes('knob:pointermove@220'), 'moves retarget to the capturing element: ' + fired);
+  assert.ok(!fired.some((f) => f.startsWith('other:pointermove')), 'nothing leaks to the element underneath: ' + fired);
+  w.__setNow(3000); w.__pumpRaf(); // past the release
+  assert.ok(fired.includes('knob:pointerup@300'), 'released on the capturer: ' + fired);
+  assert.ok(fired.includes('knob:lostpointercapture@300'), 'capture is released with the press: ' + fired);
+  assert.equal(captured, false, 'releasePointerCapture was called');
   O.stopPreview();
 });
 

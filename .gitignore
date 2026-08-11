@@ -2,3 +2,4 @@ node_modules/
 !extension/icons/*.png
 *.pem
 sandbox/*
+*.mp4

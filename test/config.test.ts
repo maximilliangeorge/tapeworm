@@ -20,8 +20,28 @@ test('minimal config gets documented defaults', () => {
   assert.equal(r.prewarm.mode, 'full');
   assert.equal(r.page.clock, 'virtual');
   assert.equal(r.page.video, 'sync');
+  assert.equal(r.page.embeds, 'sync');
   assert.equal(r.page.unlockIntro.enabled, true);
   assert.ok(r.jobs >= 1);
+});
+
+test('page.embeds follows page.video unless set explicitly', () => {
+  assert.equal(resolveConfig({ ...BASE, page: { video: 'freeze' } }).page.embeds, 'freeze');
+  assert.equal(resolveConfig({ ...BASE, page: { video: 'ignore' } }).page.embeds, 'ignore');
+  const split = resolveConfig({ ...BASE, page: { video: 'sync', embeds: 'freeze' } });
+  assert.equal(split.page.video, 'sync');
+  assert.equal(split.page.embeds, 'freeze');
+});
+
+test('page.video and page.embeds reject unknown modes', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { video: 'syncc' as never } }),
+    /page.video must be sync, freeze or ignore/,
+  );
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { embeds: 'pause' as never } }),
+    /page.embeds must be sync, freeze or ignore/,
+  );
 });
 
 test('url is required and must parse', () => {
@@ -167,7 +187,7 @@ const REC = {
 test('record steps are accepted and pass through verbatim', () => {
   const r = resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, REC] });
   assert.deepEqual(r.timeline[1], REC);
-  assert.deepEqual(r.page.cursor, { image: null, tipX: 5, tipY: 3, size: 22 }, 'drawn cursor defaults to the built-in arrow');
+  assert.deepEqual(r.page.cursor, { image: null, tipX: 5, tipY: 3, size: 22, fade: 0 }, 'drawn cursor defaults to the built-in arrow, no fade');
   assert.equal(resolveConfig({ url: BASE.url, page: { cursor: false }, timeline: [{ at: 'top' }, REC] }).page.cursor, false);
 });
 
@@ -201,6 +221,20 @@ test('malformed recordings fail with the index and the defect', () => {
   bad({ buttons: [{ t: 400, action: 'press' }] }, /buttons\[0\] must be/);
   bad({ viewport: undefined }, /needs the "viewport" it was recorded at/);
   bad({ hold: -1 }, /"hold" must be seconds >= 0/);
+});
+
+test('cursor smoothing is validated: booleans and denoise objects pass, anything else fails loudly', () => {
+  for (const smoothing of [true, false, { mode: 'denoise' }, { strength: 0.7 }, { mode: 'denoise', strength: 0 }]) {
+    const r = resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, smoothing } as never] });
+    assert.deepEqual((r.timeline[1] as typeof REC & { smoothing: unknown }).smoothing, smoothing);
+  }
+  const bad = (smoothing: unknown, re: RegExp) =>
+    assert.throws(() => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, smoothing } as never] }), re);
+  bad('denoise', /smoothing must be a boolean or/);
+  bad({ mode: 'glide' }, /unknown "record" smoothing mode "glide" \(this version has: denoise\)/);
+  bad({ strength: 2 }, /strength must be a number from 0 to 1/);
+  bad({ strength: -0.1 }, /strength must be a number from 0 to 1/);
+  bad({ strength: 'high' }, /strength must be a number from 0 to 1/);
 });
 
 test('the start step can pin the url: used when config.url is absent, must agree when both exist', () => {
@@ -278,9 +312,9 @@ test('page.cursor: a replacement image is validated and embedded at config time'
 
   // Remote and data: URLs pass through; tip and size default to top-left, 32px.
   assert.deepEqual(cur({ image: 'https://example.com/c.png' }),
-    { image: 'https://example.com/c.png', tipX: 0, tipY: 0, size: 32 });
+    { image: 'https://example.com/c.png', tipX: 0, tipY: 0, size: 32, fade: 0 });
   assert.deepEqual(cur({ image: 'data:image/png;base64,AAAA', tip: [4, 6], size: 48 }),
-    { image: 'data:image/png;base64,AAAA', tipX: 4, tipY: 6, size: 48 });
+    { image: 'data:image/png;base64,AAAA', tipX: 4, tipY: 6, size: 48, fade: 0 });
 
   // A local file becomes a data: URI — a typo'd path fails here, not mid-render.
   const dir = mkdtempSync(join(tmpdir(), 'tapeworm-test-'));
@@ -324,10 +358,33 @@ test('page.cursor auto: the macOS set embeds with per-cursor sizes and hotspots'
     [56, 64, 24, 16],
   );
 
+  // fade rides along in auto mode, one value for the whole set
+  const faded = cur({ auto: true, fade: 0.3 });
+  assert.equal(faded && typeof faded === 'object' && 'fade' in faded ? faded.fade : undefined, 0.3);
+
   assert.throws(() => cur({ auto: true, image: 'x.png' }), /either "auto" or "image"/);
   assert.throws(() => cur({ auto: true, tip: [1, 2] }), /tip does not apply to auto/);
   assert.throws(() => cur({ auto: 'yes' }), /"page\.cursor" must be/);
   assert.throws(() => cur({ auto: true, size: 0 }), /size must be/);
+});
+
+test('page.cursor.fade: opt-in seconds, usable with or without a replacement image', () => {
+  const cur = (cursor: unknown) =>
+    resolveConfig({ ...BASE, page: { cursor } } as unknown as Config).page.cursor;
+
+  // fade alone keeps the built-in arrow
+  assert.deepEqual(cur({ fade: 0.3 }), { image: null, tipX: 5, tipY: 3, size: 22, fade: 0.3 });
+  assert.deepEqual(cur({ fade: 0 }), { image: null, tipX: 5, tipY: 3, size: 22, fade: 0 }, 'zero is a valid explicit choice');
+  // and composes with a replacement sprite
+  assert.deepEqual(cur({ image: 'https://example.com/c.png', fade: 0.5 }),
+    { image: 'https://example.com/c.png', tipX: 0, tipY: 0, size: 32, fade: 0.5 });
+
+  assert.throws(() => cur({ fade: -0.1 }), /fade must be seconds >= 0/);
+  assert.throws(() => cur({ fade: '0.3' }), /fade must be seconds >= 0/);
+  assert.throws(() => cur({ fade: Infinity }), /fade must be seconds >= 0/);
+  // tip/size describe a replacement sprite — without an image they're a mistake
+  assert.throws(() => cur({ fade: 0.3, size: 40 }), /"page\.cursor" must be/);
+  assert.throws(() => cur({ tip: [1, 2] }), /"page\.cursor" must be/);
 });
 
 test('parseConfig parses raw text (the stdin path) with the same tolerances as loadConfig', () => {

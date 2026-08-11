@@ -121,6 +121,7 @@ That covers both kinds of navigation. A document load is spotted with a marker t
   "samples": { "t": [0, 16, 33, …], "x": [512, 514, 519, …], "y": [300, 301, 303, …], "s": [0, 0, 2, …] },
   "buttons": [{ "t": 1204, "action": "down" }, { "t": 1287, "action": "up" }],
   "viewport": { "width": 1280, "height": 800, "dpr": 2 },
+  "smoothing": true,
   "hold": 0.5
 }
 ```
@@ -138,13 +139,17 @@ The sprite is replaceable at render time — the macOS cursor set, or one sprite
 
 `image` is instead a single fixed sprite: a local image file (png/svg/gif/jpeg/webp — embedded into the render at config time, so a typo'd path fails before Chrome launches), or an `https:`/`data:` URL. `tip` is the [x, y] px inside the rendered sprite where the pointer tip sits — the point that lands on what the recording pointed at (default `[0, 0]`, the top-left corner). `size` is the rendered width in CSS px, height keeping the image's aspect (default 32). The press feedback (a slight shrink around the tip while a button is down) applies in both modes. From the CLI, `--cursor auto` / `--cursor hand.png` do the same, `--cursor-size 40` sets the size, and `--cursor none` hides it.
 
+By default the sprite pops in on the recording's first frame and pops out when the scroll first moves off wherever it parked (through a `hold`, the sprite stays up). `"fade": 0.3` softens both edges: the sprite ramps to full opacity over its first 0.3s on screen and back to nothing over its last 0.3s, ending exactly where it used to vanish — timings don't shift, and a run too short for both ramps shrinks them so they never cross. It works with the built-in arrow alone (`"cursor": { "fade": 0.3 }`), alongside `auto`, or alongside `image`/`tip`/`size`; `0` (the default) means no fade. From the CLI, `--cursor-fade 0.3`. The opacity is computed per frame index like everything else, never from the wall clock. The extension has the same knob (**Cursor fade** in the setup panel): its preview dot fades identically, and the exported config carries the value into the render.
+
+**Cursor smoothing** is opt-in, per take: `"smoothing": true` (or `{ "mode": "denoise", "strength": 0..1 }` — `true` means strength 0.5) resolves the pointer path through a zero-phase Gaussian kernel instead of replaying the raw samples verbatim. Hand tremor and the integer stairsteps of capture disappear while the route and its timing stay yours — resolution is offline with the whole take known, so unlike a live filter there is no lag and no overshoot. The path is pinned through the raw positions at every button edge and at the take's ends — presses, releases and a drag's grab/drop points land exactly where they were recorded — and the pin is a translation of the smooth path, not a blend back to the raw one, so the motion stays equally smooth through a click. Everything between them — drag routes included — is smoothed, which is the honest cost of opting in: the pointer path the render *dispatches* (what gets hovered or dragged through mid-flight) can differ slightly from the live capture, which is why verbatim replay stays the default. Scroll is never smoothed. The extension's record-step editor exposes the same control (off / light / medium / strong), and its preview plays the smoothed path through the same shared core the render uses.
+
 Three rules keep recordings honest:
 
 - **The viewport is part of the recording.** The step stamps the viewport it was captured at, and a render at any other size is refused — breakpoints make a different size a different page, and scaling coordinates would click the wrong things. Fit the window before recording (the extension pushes you to), or set the config's `viewport` to the recorded size.
 - **Recorded clicks may route, but not load.** A recorded click that triggers a **client-side route change** replays fine: the document survives, the frames after the click were recorded on the destination view, and the render films straight through the transition. To make the far side resolvable, a recording that contains clicks is *replayed while the plan is built* — same as click steps — so a routed-to view gets settled and pre-warmed, and later anchors resolve there. A click that **loads a new document** is refused (at plan time, before a capture pass is wasted): the rest of the recording belongs to a page that no longer exists, and the load itself takes network wall-clock time no frame-indexed replay can reproduce. The authoring tools handle that for you — when a recorded click navigates to a new document, the take is automatically **split at that click** into `record` → `click` → `record`, and recording resumes on the destination (see the extension section below).
 - **The recording's scroll wins.** If the timeline stands somewhere else when the recording begins, the video cuts to the recording's starting offset — the plan warns with a ⚠ so you can add a `move` to its start first.
 
-The raw samples stay in the config on purpose: the sample-to-frame resolution (currently linear interpolation, in `shared/gesture-core.js`) can grow smoothing later, and existing recordings will simply re-resolve — no re-recording. Expect recorded scroll to be noisier than a `move` on `scroll-snap` pages: the page re-snaps offsets a human scroll passed through, and the drift note will say so.
+The raw samples stay in the config on purpose: the sample-to-frame resolution lives in `shared/gesture-core.js`, so turning `smoothing` on (or off, or up) simply re-resolves an existing recording — no re-recording, and future resolution modes get the same property. Expect recorded scroll to be noisier than a `move` on `scroll-snap` pages: the page re-snaps offsets a human scroll passed through, and the drift note will say so.
 
 `wait` remains format-only for now: it parses but is rejected with a clear message until it lands.
 
@@ -186,7 +191,28 @@ This is the part most tools get wrong. Every `<video>` is paused, seeked to the 
 
 **If a video won't seek, the tool tells you which and why** — it probes before the render rather than after. The most common cause is a server that ignores HTTP Range requests: `currentTime` assignment silently no-ops and every frame shows the same picture with no error anywhere. Python's `http.server` does this, so a locally-served page will hit it.
 
-**Won't work, no workaround:** DRM/EME content (captures black), cross-origin embeds like YouTube and Vimeo (the inner `<video>` is unreachable and adaptive anyway), live streams. Use `"freeze"` and composite separately.
+### Embeds (YouTube, Vimeo)
+
+A cross-origin embed's inner `<video>` is unreachable (cross-origin DOM in a separate renderer process), so embeds get their own mechanism: tapeworm drives the provider's player through its postMessage API from the top frame — pausing it, muting it, and seeking it to each frame's timestamp. `page.embeds` (CLI `--embeds`) takes the same three modes as `page.video` and **defaults to whatever `page.video` is**, so most configs never mention it; set it separately when you want native videos synced but an embed frozen.
+
+Page UI built on the providers' JS SDKs keeps working while tapeworm holds the player paused. A paused Vimeo player never emits the `timeupdate` stream a playing one does, so in sync mode tapeworm re-broadcasts each frame's timestamp as the same `timeupdate` message the player posts during real playback — a custom scrubber or chapter highlight wired to `player.on('timeupdate', …)` tracks the render timeline instead of freezing at 0. When the timeline runs past the embed's duration, the stream pins one final `timeupdate` at `percent: 1` and goes quiet, the way a finished player does. Each embed also gets a **birth time**: one that mounts mid-render (a click-opened overlay player) is seeked from its own zero, not the render's global clock — otherwise a short video in a long render would start midway or sit past its end, frozen on its last frame.
+
+`play` is broadcast too, once, just ahead of the first `timeupdate`. Without it a play/pause button reads the *real* `pause` that tapeworm's own autoplay defense provokes and sits on the wrong icon for every frame of the output while the video visibly advances behind it. If the player emits a real `pause` later, the next frame restates `play`. The side effects are real and accepted: a page's `play` handler runs during the render, so analytics fire and pause-other-players logic runs — a page that can't take that wants `freeze` or `ignore`.
+
+**A pause the page itself commands is honored** (Vimeo only). The player acks every method call it receives, and tapeworm counts its own pause commands against those acks — an unmatched pause ack means the page's own `player.pause()` ran, whether from a scripted click or a pause-on-scroll/visibility handler reacting to the timeline. The embed then freezes on the frame it stopped at, one synthetic `pause` flips the page's UI (the really-already-paused player emits no event for a no-op pause), and the `timeupdate` stream goes quiet the way a paused player's does. When the page calls `play()` again, playback resumes from the paused-at time — the frames spent paused don't skip ahead — and a scrub while paused (`pause()` then `setCurrentTime()`) moves the resume point. This makes those frames depend on *when* the pause landed, which is fine only because sync-mode embeds already run single-worker. YouTube's widget protocol has no per-command acks, so a page pause there is invisible from the top frame and the control keeps driving.
+
+Some events are deliberately *not* faked: `pause` outside the page-commanded case above (the page hears the player's real ones, and an unprompted forged one would only undo the `play` above), `ended` (pages routinely close or hide their player when the video finishes — a forged `ended` blanks the embed on camera; the pinned `timeupdate` carries the same information without commanding anyone's UI — and past the end no `play` is announced either, since a stopped player isn't playing), and `cuepoint` (it only fires when playback crosses a registered cue point, which paused seeks never do). Everything else — `seeked`, `progress`, buffering, volume — the paused player still emits for real. YouTube needs no equivalent — a page's own `YT.Player` registers its own listening channel and the widget keeps it informed on every seek.
+
+Honest caveats, because this path is best-effort where the native one is exact:
+
+- **Provider seeks are keyframe-coarse.** The player snaps to what's buffered and keyed, so an embed can sit a couple hundred ms off the exact frame time. Fine in a scrollthrough; not a mastering path.
+- **Sync-mode embeds force `--jobs 1`.** Each parallel worker would buffer the stream independently, and a shard boundary could land inside the embed on a visibly different frame. The render says so when it clamps; `--embeds freeze` or `ignore` restores parallelism.
+- **An embed shorter than the timeline holds its last frame.** Provider embeds don't loop, so once the render's clock passes the video's duration every seek clamps there and the picture stops moving — for a 10s video in a 20s render, exactly halfway. That's the video ending, not the render breaking; the pre-render probe now says so. Shorten the timeline, or accept the still.
+- **YouTube embeds need `enablejsapi=1`** in the iframe URL. tapeworm adds it automatically at discovery (which reloads the iframe — harmless during page load/pre-warm, and only ever during a render).
+- **An embed nobody wrote an adapter for** (or one that never answers the handshake — consent walls inside the iframe do this) free-runs on the wall clock exactly as before, and the pre-render probe names it. There is no way to freeze an arbitrary cross-origin iframe from outside; composite separately if it matters.
+- YouTube may still inject ads; no API controls that.
+
+**Won't work, no workaround:** DRM/EME content (captures black), live streams, non-YouTube/Vimeo embeds. Use `"freeze"` (native video) and composite separately.
 
 ### Substituting assets
 
@@ -308,12 +334,14 @@ tapeworm <config.json> | <url> | -     # - reads the config from stdin
     --auto             discover sections instead of using the config timeline
     --sections <n>     how many sections --auto visits, default 6
     --video <mode>     sync | freeze | ignore
+    --embeds <mode>    same modes for YouTube/Vimeo iframes, default: follows --video
     --clock <mode>     virtual | real
     --cursor <c>       replace the drawn gesture cursor: "auto" (the macOS set,
                        following the CSS cursor under the pointer) or an image;
                        "none" hides it
     --cursor-size <px> rendered cursor width (for auto: the arrow's width,
                        the rest of the set scales proportionally)
+    --cursor-fade <s>  fade the drawn cursor in/out over this many seconds, default 0
     --prewarm <mode>   full | cache | none, default full
     --reveals          shorthand for --prewarm cache
     --image-budget <ms>  longest a frame waits for a loading image
@@ -336,7 +364,7 @@ Hand-writing selectors and guessing holds works, but there are two faster ways t
 
 Because author mode *is* the render environment, it's also the tiebreaker: if the browser extension and a render ever disagree about where an anchor lands, what author mode shows is what the render will do.
 
-**The Chrome extension** (in `extension/`, load unpacked via `chrome://extensions`) authors in your everyday browser: click the toolbar action, pick elements on the page, edit timing/easing/holds in the side panel, preview the motion in real time, export the config. **● Record** arms record mode: a banner appears on the page, your pointer movement, clicks and scrolling are captured until you press ESC, and the take lands as one `record` step. Click through a link mid-recording and the take **splits automatically**: everything before the click stays a `record` step, the click becomes a `click` step (a real navigation at render time), and recording resumes on the destination once it loads — one continuous performance becomes `record` → `click` → `record` without re-arming anything. Previewing that timeline follows the navigation the same way: the panel re-attaches on the destination and playback resumes there, and scroll steps whose anchors only exist on the destination resolve once playback reaches them. (The preview replays a recording's scroll, traces a cursor dot, and emulates the hover under it — and its clicks — with the same untrusted-input approximation hover steps use, so a recorded click that routes client-side routes in the preview too; drag effects are render-only, where they run as trusted input.) Two honesty features matter:
+**The Chrome extension** (in `extension/`, load unpacked via `chrome://extensions`) authors in your everyday browser: click the toolbar action, pick elements on the page, edit timing/easing/holds in the side panel, preview the motion in real time, export the config. **● Record** arms record mode: a banner appears on the page, your pointer movement, clicks and scrolling are captured until you press ESC, and the take lands as one `record` step. Click through a link mid-recording and the take **splits automatically**: everything before the click stays a `record` step, the click becomes a `click` step (a real navigation at render time), and recording resumes on the destination once it loads — one continuous performance becomes `record` → `click` → `record` without re-arming anything. Previewing that timeline follows the navigation the same way: the panel re-attaches on the destination and playback resumes there, and scroll steps whose anchors only exist on the destination resolve once playback reaches them. (The preview replays a recording's scroll, traces a cursor dot, and emulates the hover under it — and its clicks and drags — with the same untrusted-input approximation hover steps use: a recorded click that routes client-side routes in the preview too, pointer-listener drags replay with the button held, and a `draggable` source gets the native dragstart→dragover→drop sequence. Libraries that gate on `isTrusted` respond only in the render, where the input is real.) Two honesty features matter:
 
 - The render always captures the **full viewport at the configured size**, and CSS breakpoints mean a page laid out in a different-sized window is a different page. So the extension doesn't draw a pretend frame inside your window — **Fit window** (with viewport presets) resizes the browser window until the page viewport *is* the render viewport, and a badge on the page says ✓ when it matches or warns when it doesn't. Author at the size you'll render at.
 - **Prepare page** steps through the whole page the way the renderer's pre-warm does, so lazy content loads and scroll reveals fire *before* you pick. Skipping it means anchors resolve against un-fired reveal transforms — positions the render will never see. Do it first.
@@ -365,6 +393,8 @@ The extension ships `src/shared/*.js` verbatim (selector generation, anchor reso
 
 **Video is one frozen frame** — check the note in the output. Almost always Range requests.
 
+**An embed free-runs or won't seek** — check the pre-render note: an embed nobody wrote an adapter for can't be controlled at all, a dead handshake (consent wall inside the iframe) means the player never listened, and a seek miss means the provider snapped to a keyframe. `--embeds freeze` pauses a controllable embed instead of chasing it.
+
 **A page breaks with the virtual clock** — `--clock real`. You lose deterministic JS animation timing but keep everything else, including video seeking.
 
 Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
@@ -375,7 +405,7 @@ Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
 
 - **Inner scroll containers** aren't supported — only the document scroller.
 - **Full-page-section hijackers** (fullPage.js, Webflow page sections) need per-library adapters that don't exist yet.
-- **Cross-origin iframes** are opaque: their animations and video can't be controlled.
+- **Cross-origin iframes** are opaque — except YouTube and Vimeo embeds, which are driven through their player postMessage APIs (best-effort and keyframe-coarse; see "Embeds"). Anything else in an iframe free-runs.
 - **Recorded gestures replay only on the layout they were captured on**: a `record` step refuses a different viewport, and a recorded click that loads a new document is refused (client-side route changes replay; for document loads the authoring tools split the take into `record` → `click` → `record` automatically).
 - **No motion blur.** The correct approach is supersampling — render at 4–8× the frame rate in sub-frame steps and average — which isn't implemented. It would come free from the existing frame-index model.
 - **No audio.** By design; this is a picture pipeline.

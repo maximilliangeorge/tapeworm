@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, peakStep, type Track } from '../src/timeline.ts';
+import { buildTrack, cursorAlphas, peakStep, type Track } from '../src/timeline.ts';
 import { resolveConfig } from '../src/config.ts';
 import type { Session } from '../src/cdp.ts';
 import type { Resolved, TimelineEntry } from '../src/types.ts';
@@ -430,4 +430,71 @@ test('a recording that starts away from where the timeline stands earns a jump-c
   const nearby = { ...REC, buttons: undefined };
   const quiet = await buildTrack(fakeSession(), cfgWith([{ type: 'start', at: 'top', hold: 0.5 }, nearby]));
   assert.ok(!quiet.plan.some((l) => l.includes('⚠')), 'no warning when the recording starts where the timeline is');
+});
+
+// ---------------------------------------------------------------------------
+// cursorAlphas: the opt-in fade the drawn cursor gets where it appears and
+// disappears. Pure per-frame data, mirroring the capture loop's own
+// show/hide rule (visible through a hold that parks the offset, hidden the
+// moment the scroll moves off it).
+
+/** A hand-built track: `null` = no pointer that frame; a number is the offset. */
+function fadeTrack(spec: Array<{ y: number; ptr?: boolean }>): Track {
+  return {
+    offsets: spec.map((f) => f.y),
+    pointer: spec.map((f) => (f.ptr ? { x: 10, y: 10, down: false } : null)),
+    actions: [],
+    sequential: true,
+    plan: [],
+  };
+}
+
+test('cursorAlphas ramps in at appearance and out into the disappearance, holding 1 between', () => {
+  // 3 hidden frames, 10 recorded frames at offset 100, 4 hold frames (offset
+  // parked), then the scroll moves — where the sprite currently vanishes.
+  const spec = [
+    ...Array.from({ length: 3 }, () => ({ y: 0 })),
+    ...Array.from({ length: 10 }, () => ({ y: 100, ptr: true })),
+    ...Array.from({ length: 4 }, () => ({ y: 100 })),
+    ...Array.from({ length: 3 }, () => ({ y: 200 })),
+  ];
+  const a = cursorAlphas(fadeTrack(spec), 10, 0.3); // 3 fade frames
+  assert.deepEqual(a.slice(0, 3), [0, 0, 0], 'hidden before the recording');
+  assert.deepEqual(a.slice(3, 6), [1 / 4, 2 / 4, 3 / 4], 'even ramp up from 0');
+  assert.deepEqual(a.slice(6, 14), Array(8).fill(1), 'fully opaque in the middle (hold included)');
+  assert.deepEqual(a.slice(14, 17), [3 / 4, 2 / 4, 1 / 4], 'even ramp down into the vanish frame');
+  assert.deepEqual(a.slice(17), [0, 0, 0], 'hidden once the scroll moves off the parked offset');
+});
+
+test('cursorAlphas: no fade-out when the video ends with the cursor still up', () => {
+  const spec = [
+    ...Array.from({ length: 2 }, () => ({ y: 0 })),
+    ...Array.from({ length: 8 }, () => ({ y: 50, ptr: true })),
+  ];
+  const a = cursorAlphas(fadeTrack(spec), 10, 0.2); // 2 fade frames
+  assert.deepEqual(a.slice(2, 4), [1 / 3, 2 / 3], 'still fades in');
+  assert.deepEqual(a.slice(4), Array(6).fill(1), 'stays opaque to the last frame');
+});
+
+test('cursorAlphas: a short visible run shrinks the ramps so they never cross, and fade 0 means no fade', () => {
+  const short = [
+    { y: 0 },
+    ...Array.from({ length: 4 }, () => ({ y: 30, ptr: true })),
+    { y: 90 },
+  ];
+  const a = cursorAlphas(fadeTrack(short), 10, 1); // asks for 10 frames, run is 4 → 2 each
+  assert.deepEqual(a, [0, 1 / 3, 2 / 3, 2 / 3, 1 / 3, 0]);
+
+  const none = cursorAlphas(fadeTrack(short), 10, 0);
+  assert.deepEqual(none, [0, 1, 1, 1, 1, 0], 'fade 0: visibility only, all-or-nothing');
+});
+
+test('cursorAlphas: a free frame (NaN — a route transition owns the scroll) ends visibility like a scroll-away', () => {
+  const spec = [
+    ...Array.from({ length: 6 }, () => ({ y: 10, ptr: true })),
+    { y: NaN },
+    { y: NaN },
+  ];
+  const a = cursorAlphas(fadeTrack(spec), 10, 0.2);
+  assert.deepEqual(a.slice(4, 8), [2 / 3, 1 / 3, 0, 0], 'fades out into the free frames');
 });

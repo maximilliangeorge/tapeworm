@@ -151,6 +151,23 @@ function validateRecord(e: Step & { type: 'record' }, i: number): void {
       prevT = b.t;
     }
   }
+  if (e.smoothing !== undefined && typeof e.smoothing !== 'boolean') {
+    const sm = e.smoothing as { mode?: unknown; strength?: unknown };
+    if (typeof sm !== 'object' || sm === null) {
+      throw new Error(`timeline[${i}]: "record" smoothing must be a boolean or { mode?, strength? }`);
+    }
+    // reject unknown modes so a config authored for a future tapeworm fails
+    // loudly here instead of silently rendering with the wrong look
+    if (sm.mode !== undefined && sm.mode !== 'denoise') {
+      throw new Error(`timeline[${i}]: unknown "record" smoothing mode "${String(sm.mode)}" (this version has: denoise)`);
+    }
+    if (
+      sm.strength !== undefined &&
+      (typeof sm.strength !== 'number' || !Number.isFinite(sm.strength) || sm.strength < 0 || sm.strength > 1)
+    ) {
+      throw new Error(`timeline[${i}]: "record" smoothing strength must be a number from 0 to 1`);
+    }
+  }
   const v = e.viewport as { width?: unknown; height?: unknown } | undefined;
   const isDim = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
   if (!v || !isDim(v.width) || !isDim(v.height)) {
@@ -236,18 +253,22 @@ export const AUTO_CURSORS: Record<string, { w: number; tip: [number, number] }> 
  * not render an invisible cursor minutes in.
  */
 function resolveCursor(
-  c: boolean | { auto?: unknown; image?: unknown; tip?: unknown; size?: unknown } | undefined,
+  c: boolean | { auto?: unknown; image?: unknown; tip?: unknown; size?: unknown; fade?: unknown } | undefined,
   pageUrl: string,
 ): Resolved['page']['cursor'] {
   if (c === false) return false;
-  if (c === undefined || c === true) return { ...BUILTIN_CURSOR };
+  if (c === undefined || c === true) return { ...BUILTIN_CURSOR, fade: 0 };
   const shapeError = () =>
     new Error(
-      '"page.cursor" must be true, false, { auto: true, size?: px } (the macOS set, ' +
+      '"page.cursor" must be true, false, { auto: true, size?: px, fade?: seconds } (the macOS set, ' +
         'picked per frame from the CSS cursor under the pointer), or ' +
-        '{ image: "path or url", tip?: [x, y], size?: px }',
+        '{ image?: "path or url", tip?: [x, y], size?: px, fade?: seconds } (tip/size require image)',
     );
-  if (typeof c !== 'object') throw shapeError();
+  if (typeof c !== 'object' || c === null) throw shapeError();
+  const fade = c.fade ?? 0;
+  if (typeof fade !== 'number' || !Number.isFinite(fade) || fade < 0) {
+    throw new Error('page.cursor.fade must be seconds >= 0');
+  }
   if (c.auto !== undefined) {
     if (c.auto !== true) throw shapeError();
     if (c.image !== undefined) throw new Error('page.cursor: give either "auto" or "image", not both');
@@ -271,7 +292,14 @@ function resolveCursor(
         size: w * scale,
       };
     }
-    return { auto: sprites };
+    return { auto: sprites, fade };
+  }
+  if (c.image === undefined) {
+    // Options-only form: the built-in arrow, faded. tip/size describe a
+    // replacement sprite, so without one they're a mistake worth surfacing —
+    // and a bare {} is too.
+    if (c.tip !== undefined || c.size !== undefined || c.fade === undefined) throw shapeError();
+    return { ...BUILTIN_CURSOR, fade };
   }
   if (typeof c.image !== 'string' || c.image === '') throw shapeError();
   const tip = c.tip ?? [0, 0];
@@ -308,7 +336,7 @@ function resolveCursor(
     }
     image = `data:${mime};base64,${readFileSync(path).toString('base64')}`;
   }
-  return { image, tipX: tip[0], tipY: tip[1], size };
+  return { image, tipX: tip[0], tipY: tip[1], size, fade };
 }
 
 export function resolveConfig(input: Config): Resolved {
@@ -354,6 +382,16 @@ export function resolveConfig(input: Config): Resolved {
     outPath = outPath.replace(/\.png$/i, '');
   } else if (!extname(outPath)) {
     outPath += codec === 'prores' ? '.mov' : '.mp4';
+  }
+
+  const videoModes = ['sync', 'freeze', 'ignore'];
+  const video = input.page?.video ?? 'sync';
+  if (!videoModes.includes(video)) {
+    throw new Error(`page.video must be sync, freeze or ignore (got "${video}")`);
+  }
+  const embeds = input.page?.embeds ?? video;
+  if (!videoModes.includes(embeds)) {
+    throw new Error(`page.embeds must be sync, freeze or ignore (got "${embeds}")`);
   }
 
   const prewarmMode: 'full' | 'cache' | 'none' =
@@ -413,7 +451,8 @@ export function resolveConfig(input: Config): Resolved {
       clock: input.page?.clock ?? 'virtual',
       seekAnimations: input.page?.seekAnimations ?? true,
       cursor: resolveCursor(input.page?.cursor, url),
-      video: input.page?.video ?? 'sync',
+      video,
+      embeds,
       css: input.page?.css ?? '',
       script: input.page?.script ?? '',
       settle: input.page?.settle ?? 0,
