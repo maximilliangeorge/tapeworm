@@ -42,7 +42,7 @@ export function loadConfig(path: string): Config {
  * shapes and values keep their pointed errors in the resolvers below.
  */
 const KNOWN_KEYS = {
-  top: ['url', 'viewport', 'fps', 'timeline', 'auto', 'output', 'prewarm', 'page', 'trim', 'jobs', 'chromePath', 'meta', 'headful'],
+  top: ['url', 'viewport', 'fps', 'timeline', 'auto', 'output', 'prewarm', 'page', 'frame', 'trim', 'jobs', 'chromePath', 'meta', 'headful'],
   viewport: ['width', 'height', 'dpr'],
   auto: ['maxSections'],
   output: ['path', 'codec', 'crf'],
@@ -473,6 +473,25 @@ function resolveCursor(
   return { image, tipX: tip[0], tipY: tip[1], size, fade };
 }
 
+function resolveFrame(f: Config['frame']): Resolved['frame'] {
+  if (f === undefined) return null;
+  if (typeof f === 'string' && f.trim().endsWith('%')) {
+    const body = f.trim().slice(0, -1).trim();
+    const pct = body === '' ? NaN : Number(body); // Number('') is 0, so a bare "%" needs refusing by hand
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      throw new Error(`"frame" percent must be 0-100 (got "${f}")`);
+    }
+    return { pct };
+  }
+  const sec = typeof f === 'number' ? f : typeof f === 'string' && f.trim() !== '' ? Number(f) : NaN;
+  if (!Number.isFinite(sec) || sec < 0) {
+    throw new Error(
+      `"frame" must be seconds into the timeline (e.g. 2.5) or a percent of it (e.g. "50%"), got ${JSON.stringify(f)}`,
+    );
+  }
+  return { sec };
+}
+
 function resolveTrim(t: Config['trim']): Resolved['trim'] {
   if (t === undefined) return { startMs: 0, endMs: 0 };
   if (!t || typeof t !== 'object' || Array.isArray(t)) {
@@ -525,9 +544,16 @@ export function resolveConfig(input: Config): Resolved {
   const fps = input.fps ?? 60;
   if (!Number.isFinite(fps) || fps < 1 || fps > 240) throw new Error(`fps must be 1-240 (got ${fps})`);
 
-  let outPath = resolvePath(input.output?.path ?? 'out.mp4');
-  const codec = input.output?.codec ?? CODEC_BY_EXT[extname(outPath).toLowerCase()] ?? 'h264';
-  if (codec === 'png') {
+  const frame = resolveFrame(input.frame);
+  let outPath = resolvePath(input.output?.path ?? (frame ? 'frame.png' : 'out.mp4'));
+  let codec = input.output?.codec ?? CODEC_BY_EXT[extname(outPath).toLowerCase()] ?? 'h264';
+  if (frame) {
+    // A sampled frame is always one PNG file. The codec and a video extension
+    // describe the video the frame is sampled FROM, so they're set aside
+    // rather than argued with — "demo.mp4" samples to "demo.png".
+    codec = 'png';
+    outPath = extname(outPath) ? outPath.replace(/\.[^.]+$/, '.png') : outPath + '.png';
+  } else if (codec === 'png') {
     // A frame sequence is a directory, so "frames.png" means "a directory called frames"
     outPath = outPath.replace(/\.png$/i, '');
   } else if (!extname(outPath)) {
@@ -615,6 +641,7 @@ export function resolveConfig(input: Config): Resolved {
       },
       substitute: resolveSubstitute(input.page?.substitute, url),
     },
+    frame,
     trim: resolveTrim(input.trim),
     // 'cache' and 'none' film reveals as they happen, and reveal state depends on the
     // path taken to get there — a shard that jumps straight to frame 400 would show

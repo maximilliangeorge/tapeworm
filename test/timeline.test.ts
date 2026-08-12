@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, cursorAlphas, peakStep, trimRange, type Track } from '../src/timeline.ts';
+import { buildTrack, cursorAlphas, frameIndex, peakStep, trimRange, type Track } from '../src/timeline.ts';
 import { resolveConfig } from '../src/config.ts';
 import type { Session } from '../src/cdp.ts';
 import type { Resolved, TimelineEntry } from '../src/types.ts';
@@ -511,4 +511,26 @@ test('trimRange: refuses a trim that leaves nothing', () => {
   assert.throws(() => trimRange(120, 60, { startMs: 2000, endMs: 0 }), /trim leaves nothing/);
   // exactly one frame left is still a video
   assert.deepEqual(trimRange(120, 60, { startMs: 1000, endMs: 983 }), { first: 60, last: 61 });
+});
+
+test('frameIndex: seconds round to the nearest frame', () => {
+  assert.equal(frameIndex(600, 60, { sec: 0 }), 0);
+  assert.equal(frameIndex(600, 60, { sec: 2.5 }), 150);
+  assert.equal(frameIndex(600, 60, { sec: 0.008 }), 0);
+  assert.equal(frameIndex(600, 60, { sec: 0.009 }), 1);
+});
+
+test('frameIndex: a time within the duration clamps to the last frame; past it is refused', () => {
+  // the timeline runs 10s but its last frame sits at 9.983s
+  assert.equal(frameIndex(600, 60, { sec: 10 }), 599);
+  assert.equal(frameIndex(600, 60, { sec: 9.99 }), 599);
+  assert.throws(() => frameIndex(600, 60, { sec: 10.02 }), /past the end/);
+  assert.throws(() => frameIndex(600, 60, { sec: 60 }), /timeline runs 10\.00s/);
+});
+
+test('frameIndex: percent maps 0..100 onto first..last', () => {
+  assert.equal(frameIndex(600, 60, { pct: 0 }), 0);
+  assert.equal(frameIndex(600, 60, { pct: 100 }), 599);
+  assert.equal(frameIndex(600, 60, { pct: 50 }), 300);
+  assert.equal(frameIndex(1, 60, { pct: 100 }), 0);
 });

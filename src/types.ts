@@ -278,6 +278,16 @@ export type Config = {
     substitute?: Array<{ from: string; to: string }>;
   };
   /**
+   * Sample a single frame instead of rendering the video: seconds into the
+   * timeline (`2.5`), or a percent of it (`"50%"` — `"100%"` is the last
+   * frame). The timeline is still planned in full (and, when the render is
+   * path-dependent, walked up to the sampled frame), so the frame is
+   * pixel-identical to the same moment of a full render. The output is one
+   * PNG file (`output.path` names it; a video extension there is swapped for
+   * `.png`) and `output.codec` is ignored. CLI: `--frame`.
+   */
+  frame?: number | string;
+  /**
    * Cut milliseconds off the ends of the finished video. The whole timeline is
    * still planned (and, when the render is path-dependent, walked) — trimming
    * only drops the trimmed frames from the output, so what remains is
@@ -358,6 +368,8 @@ export type Resolved = {
     /** `to` is an http(s) URL, or an absolute local path verified to exist. */
     substitute: Array<{ from: string; to: string }>;
   };
+  /** Single-frame sampling: seconds into the timeline, or a percent of it. Null = render the video. */
+  frame: { sec: number; pct?: never } | { pct: number; sec?: never } | null;
   trim: { startMs: number; endMs: number };
   jobs: number;
   chromePath: string | null;

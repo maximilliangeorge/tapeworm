@@ -317,6 +317,27 @@ export function trimRange(total: number, fps: number, trim: { startMs: number; e
 }
 
 /**
+ * Resolve the config's `frame` (single-frame sampling) to a frame index.
+ * Seconds map through fps; a time up to the timeline's duration lands on the
+ * last frame rather than erroring (the timeline runs total/fps seconds but
+ * its last frame sits at (total−1)/fps), while a time past the end is refused
+ * with the duration in the message. A percent maps 0..100 onto first..last.
+ */
+export function frameIndex(total: number, fps: number, frame: { sec?: number; pct?: number }): number {
+  if (frame.pct !== undefined) return Math.round((frame.pct / 100) * (total - 1));
+  const sec = frame.sec!;
+  const idx = Math.round(sec * fps);
+  if (idx >= total) {
+    if (sec <= total / fps) return total - 1;
+    throw new Error(
+      `frame ${sec}s is past the end — the timeline runs ${(total / fps).toFixed(2)}s ` +
+        `(${total} frames). Use "100%" for the last frame.`,
+    );
+  }
+  return idx;
+}
+
+/**
  * Per-frame opacity for the drawn cursor sprite, so it fades in when it
  * appears and out before it disappears instead of popping. Everything is a
  * pure function of the frame index — the core invariant — so it first replays

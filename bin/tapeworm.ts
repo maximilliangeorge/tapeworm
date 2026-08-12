@@ -35,6 +35,10 @@ OPTIONS
       --dpr <n>          device pixel ratio, default 2 (use 2 or 3, never fractional)
       --codec <c>        h264 | prores | png; normally inferred from --out
       --crf <n>          H.264 quality, lower is better, default 12
+      --frame <t>        sample ONE frame of the timeline as a single PNG
+                         instead of rendering the video: seconds in (2.5),
+                         or a percent ("50%"; "100%" = the last frame).
+                         --out names the .png file, default frame.png
   -j, --jobs <n>         parallel browsers, default min(4, cores-1)
       --auto             discover sections instead of using the config timeline
       --sections <n>     how many sections --auto should visit, default 6
@@ -78,6 +82,7 @@ EXAMPLES
   tapeworm site.json --dpr 3 --out master.mov
   tapeworm site.json --dry-run
   tapeworm https://example.com --reveals --out reveals.mp4
+  tapeworm site.json --frame 50% --out peek.png
 `;
 
 type Flags = Record<string, string | boolean>;
@@ -86,7 +91,7 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = {};
   const takesValue = new Set([
-    'out', 'o', 'fps', 'width', 'height', 'dpr', 'crf', 'jobs', 'j',
+    'out', 'o', 'fps', 'width', 'height', 'dpr', 'crf', 'frame', 'jobs', 'j',
     'sections', 'video', 'embeds', 'clock', 'cursor', 'cursor-size', 'cursor-fade', 'settle', 'chrome-path', 'codec', 'prewarm', 'image-budget', 'wait-for-intro',
   ]);
   for (let i = 0; i < argv.length; i++) {
@@ -190,6 +195,11 @@ async function main(): Promise<void> {
       ...(codec ? { codec: codec as 'h264' | 'prores' | 'png' } : {}),
     };
   }
+
+  // Raw string on purpose: "2.5" and "50%" both parse in resolveConfig, so the
+  // CLI and the config key share one validator and one set of error messages.
+  const frame = str(flags, 'frame');
+  if (frame !== undefined) config.frame = frame;
 
   const jobs = num(flags, 'jobs', 'j');
   if (jobs) config.jobs = jobs;

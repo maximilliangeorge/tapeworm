@@ -9,6 +9,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Single-frame sampling.** `--frame <t>` (config `"frame"`) renders exactly
+  one frame of the timeline as a single PNG file instead of a video — seconds
+  in (`--frame 2.5`), or a percent (`--frame 50%`; `100%` is the last frame).
+  The timeline is still planned in full, and a path-dependent render walks the
+  frames before the sampled one off camera, so the PNG is pixel-identical to
+  the same moment of a full render. `--out` names the file (default
+  `frame.png`); a video output path samples to its `.png` sibling, and the
+  codec is ignored. No ffmpeg needed.
+
 - **Unknown config keys are rejected.** A key the schema doesn't know now
   fails config validation instead of being silently ignored — previously a
   misspelled key (`"waitforIntro"`, say) just fell back to the default of the

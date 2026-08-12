@@ -90,6 +90,23 @@ export function createPngWriter(dir: string, startIndex: number): Encoder {
   };
 }
 
+/** Write one sampled frame to a single PNG file — the `frame` mode output. */
+export function createPngFileWriter(path: string): Encoder {
+  let done = Promise.resolve();
+  return {
+    write(png: Buffer) {
+      done = new Promise<void>((resolve, reject) => {
+        const s = createWriteStream(path);
+        s.on('error', reject);
+        s.on('finish', () => resolve());
+        s.end(png);
+      });
+      return Promise.resolve();
+    },
+    async finish() { await done; },
+  };
+}
+
 /** Stitch per-shard segments without re-encoding. */
 export async function concatSegments(segments: string[], outPath: string, tmpDir: string): Promise<void> {
   if (segments.length === 1) {

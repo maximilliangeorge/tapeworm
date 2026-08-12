@@ -307,6 +307,8 @@ One honest caveat: in `none`, image arrival is governed by the network, not the 
 
 Frames come out of Chrome as lossless PNG, so the encode is the only lossy step. If you have your own compression pipeline, render ProRes or PNG and feed it that.
 
+**Sampling a single frame.** `--frame <t>` (config `"frame"`) renders exactly one frame of the timeline as a single PNG file instead of a video — the fast way to check composition, an anchor's framing, or a hover state without paying for a render. `t` is seconds into the timeline (`--frame 2.5`), or a percent of it (`--frame 50%`; `100%` is the last frame). The whole timeline is still planned, and a path-dependent render (interactions, recordings, prewarm `cache`/`none`) still walks the frames before the sampled one off camera, so the PNG is pixel-identical to that moment of a full render. `--out` names the file (default `frame.png`); pointed at a config whose output is a video, the sample lands next to it as its `.png` sibling (`demo.mp4` → `demo.png`), and `output.codec` is ignored. `trim` doesn't apply — the frame you asked for is the frame you get.
+
 **Trimming.** `"trim": { "start": 1000, "end": 500 }` cuts milliseconds off the ends of the finished video (either side optional, default 0). The whole timeline is still planned, and nothing time-seeked shifts — the output is exactly what you'd get by rendering everything and cutting the file afterwards, so it's the way to drop the opening hold or the last dwell without re-authoring the timeline. Trimmed-off frames aren't captured or encoded; a path-dependent render (interactions, recordings, prewarm `cache`/`none`) still walks through them off camera so the page state stays right. A trim that leaves nothing is refused before rendering starts.
 
 **Use `--dpr 2` or `3`, never a fractional value.** Chrome stores scroll offsets on the device-pixel grid, so your effective scroll quantum is `1/dpr` CSS pixels. At DPR 1 you get integers only, and an eased curve's slow tails oscillate between 0 and 1 px per frame — visible stutter exactly where the motion should feel smoothest. Fractional DPRs quantise unevenly, which is worse. This is why 2× matters for *motion*, not just sharpness.
@@ -345,6 +347,7 @@ Everything a config file can say, with defaults. The machine-readable source of 
 | `prewarm.maxHeight` | `60000` | Stop stepping past this document height (px). |
 | `prewarm.timeout` | `30000` | Give up pre-warming past this many wall-clock ms. |
 | `prewarm.imageBudget` | `400` / `1500` | Longest a frame waits for a loading image (ms): 400 in `full` (nothing should be pending), 1500 in `cache`/`none`. |
+| `frame` | — | Sample one frame as a single PNG instead of rendering the video: seconds into the timeline, or a percent string (`"50%"`) — see "Output". CLI: `--frame`. |
 | `trim.start`, `trim.end` | `0` | Milliseconds cut off the ends of the finished video — see "Output". |
 | `jobs` | `min(4, cores−1)` | Parallel Chromes. Forced to 1 by prewarm `cache`/`none`, by `click`/`hover`/`record` steps, and (at render time) by sync-mode provider embeds. |
 | `chromePath` | auto-detect | Path to a Chrome / chrome-headless-shell binary. |
@@ -398,6 +401,8 @@ tapeworm <config.json> | <url> | -     # - reads the config from stdin
     --height <px>      CSS pixels, default 800
     --dpr <n>          device pixel ratio, default 2
     --crf <n>          H.264 quality, lower is better, default 12
+    --frame <t>        sample one frame as a single PNG: seconds into the
+                       timeline, or a percent ("50%") — see "Output"
 -j, --jobs <n>         parallel browsers
     --auto             discover sections instead of using the config timeline
     --sections <n>     how many sections --auto visits, default 6

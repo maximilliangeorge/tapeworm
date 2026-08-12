@@ -450,6 +450,40 @@ test('trim: rejects the wrong shapes', () => {
   assert.throws(() => resolveConfig({ ...BASE, trim: { start: NaN } }), /trim.start must be milliseconds >= 0/);
 });
 
+test('frame: defaults to null, resolves seconds and percents', () => {
+  assert.equal(resolveConfig(BASE).frame, null);
+  assert.deepEqual(resolveConfig({ ...BASE, frame: 2.5 }).frame, { sec: 2.5 });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: 0 }).frame, { sec: 0 });
+  // the CLI hands the raw flag string through, so both spellings parse
+  assert.deepEqual(resolveConfig({ ...BASE, frame: '2.5' }).frame, { sec: 2.5 });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: '50%' }).frame, { pct: 50 });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: '100%' }).frame, { pct: 100 });
+});
+
+test('frame: the output is one PNG file, whatever output said', () => {
+  const bare = resolveConfig({ ...BASE, frame: 0 });
+  assert.equal(bare.codec, 'png');
+  assert.ok(bare.outPath.endsWith('frame.png'));
+  // a video path samples to its .png sibling; codec is set aside, not argued with
+  const video = resolveConfig({ ...BASE, frame: 0, output: { path: 'demo.mp4', codec: 'h264' } });
+  assert.equal(video.codec, 'png');
+  assert.ok(video.outPath.endsWith('demo.png'));
+  // extensionless gets .png; an explicit .png stays a file (not a sequence directory)
+  assert.ok(resolveConfig({ ...BASE, frame: 0, output: { path: 'shot' } }).outPath.endsWith('shot.png'));
+  assert.ok(resolveConfig({ ...BASE, frame: 0, output: { path: 'shot.png' } }).outPath.endsWith('shot.png'));
+});
+
+test('frame: rejects the wrong shapes', () => {
+  assert.throws(() => resolveConfig({ ...BASE, frame: -1 }), /"frame" must be seconds/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: 'abc' }), /"frame" must be seconds/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: '' }), /"frame" must be seconds/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: NaN }), /"frame" must be seconds/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: true as never }), /"frame" must be seconds/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: '150%' }), /"frame" percent must be 0-100/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: '-5%' }), /"frame" percent must be 0-100/);
+  assert.throws(() => resolveConfig({ ...BASE, frame: '%' }), /"frame" percent must be 0-100/);
+});
+
 test('unknown keys are rejected, with the nearest known key as a suggestion', () => {
   assert.throws(
     () => resolveConfig({ ...BASE, viewpork: {} } as never),

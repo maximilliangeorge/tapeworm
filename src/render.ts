@@ -12,10 +12,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { launch } from './browser.ts';
 import type { Connection, Session } from './cdp.ts';
-import { concatSegments, createEncoder, createPngWriter, type Encoder } from './encode.ts';
+import { concatSegments, createEncoder, createPngFileWriter, createPngWriter, type Encoder } from './encode.ts';
 import { openPage, prewarm, resetPage, settleNewDocument, sleep, waitForDocumentReady, waitForSoftNavigation } from './page.ts';
 import { strobeThreshold } from './easing.ts';
-import { buildTrack, cursorAlphas, peakStep, trimRange, type Track } from './timeline.ts';
+import { buildTrack, cursorAlphas, frameIndex, peakStep, trimRange, type Track } from './timeline.ts';
 import type { Resolved, Step } from './types.ts';
 
 export type Progress = {
@@ -304,12 +304,18 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   }
 
   const total = track.offsets.length;
-  // Trim narrows which frames reach the output; it never changes what any
-  // frame CONTAINS. Frame indices stay absolute, so everything time-seeked
-  // renders exactly as it would untrimmed.
+  // Trim (and its degenerate case, single-frame sampling) narrows which frames
+  // reach the output; it never changes what any frame CONTAINS. Frame indices
+  // stay absolute, so everything time-seeked renders exactly as it would
+  // untrimmed.
   let trimmed: { first: number; last: number };
   try {
-    trimmed = trimRange(total, cfg.fps, cfg.trim);
+    if (cfg.frame) {
+      const idx = frameIndex(total, cfg.fps, cfg.frame);
+      trimmed = { first: idx, last: idx + 1 };
+    } else {
+      trimmed = trimRange(total, cfg.fps, cfg.trim);
+    }
   } catch (e) {
     lead.conn.close();
     throw e;
@@ -375,7 +381,13 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
     } catch { /* the probe is advisory; never fail the render on it */ }
   }
 
-  if (trimFirst > 0 || trimLast < total) {
+  if (cfg.frame) {
+    notes.push(
+      `sampling frame ${trimFirst} (${(trimFirst / cfg.fps).toFixed(2)}s) of the ` +
+        `${(total / cfg.fps).toFixed(2)}s timeline` +
+        (cfg.trim.startMs > 0 || cfg.trim.endMs > 0 ? ' — trim does not apply to a sampled frame' : ''),
+    );
+  } else if (trimFirst > 0 || trimLast < total) {
     notes.push(
       `trim keeps ${(trimFirst / cfg.fps).toFixed(2)}s–${(trimLast / cfg.fps).toFixed(2)}s of the ` +
         `${(total / cfg.fps).toFixed(2)}s timeline (${captureTotal} of ${total} frames)`,
@@ -393,7 +405,7 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   }
 
   const strobeAt = strobeThreshold(cfg.height, cfg.fps, cfg.dpr);
-  if (peak > strobeAt * 1.15) {
+  if (!cfg.frame && peak > strobeAt * 1.15) {
     notes.push(
       `peak motion ${Math.round(peak)} device px/frame (comfortable limit ~${Math.round(strobeAt)}) — ` +
         `this will read as strobing. Lengthen the fast segments, or raise --fps.`,
@@ -464,9 +476,11 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         const worker = workers[shard];
         const isPng = cfg.codec === 'png';
         const segPath = join(tmp, `seg${String(shard).padStart(2, '0')}.mp4`);
-        const enc: Encoder = isPng
-          ? createPngWriter(cfg.outPath, from - trimFirst)
-          : createEncoder(segPath, cfg);
+        const enc: Encoder = cfg.frame
+          ? createPngFileWriter(cfg.outPath) // one sampled frame = one file, not a sequence directory
+          : isPng
+            ? createPngWriter(cfg.outPath, from - trimFirst)
+            : createEncoder(segPath, cfg);
         if (!isPng) segments[shard] = segPath;
         const walkFrom = shard === 0 && pathDependent ? 0 : from;
         await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
