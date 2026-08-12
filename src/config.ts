@@ -34,6 +34,126 @@ export function loadConfig(path: string): Config {
   return parseConfig(raw, path);
 }
 
+/**
+ * Known keys per config object, mirroring `Config` in types.ts. A misspelled
+ * key is worse than a wrong value — the setting it meant to change silently
+ * keeps its default, and nothing fails until you notice the render ignored
+ * you — so key names are rejected outright. Only NAMES are judged here;
+ * shapes and values keep their pointed errors in the resolvers below.
+ */
+const KNOWN_KEYS = {
+  top: ['url', 'viewport', 'fps', 'timeline', 'auto', 'output', 'prewarm', 'page', 'trim', 'jobs', 'chromePath', 'meta', 'headful'],
+  viewport: ['width', 'height', 'dpr'],
+  auto: ['maxSections'],
+  output: ['path', 'codec', 'crf'],
+  prewarm: ['mode', 'enabled', 'maxHeight', 'timeout', 'reloadAfter', 'imageBudget'],
+  page: [
+    'dismissConsent', 'hideOverlays', 'clock', 'seekAnimations', 'cursor', 'video', 'embeds',
+    'css', 'script', 'settle', 'waitForIntro', 'replayIntro', 'unlockIntro', 'substitute',
+  ],
+  cursor: ['auto', 'dot', 'image', 'tip', 'size', 'fade'],
+  unlockIntro: ['maxTicks', 'deltaY'],
+  substitute: ['from', 'to'],
+  trim: ['start', 'end'],
+  anchor: ['selector', 'align', 'offset', 'nth', 'fallbackText'],
+  segment: ['to', 'at', 'duration', 'ease', 'hold'],
+  samples: ['t', 'x', 'y', 's'],
+  button: ['t', 'action'],
+  smoothing: ['mode', 'strength'],
+} as const;
+
+const STEP_KEYS: Record<string, readonly string[]> = {
+  start: ['type', 'at', 'hold', 'url'],
+  move: ['type', 'to', 'duration', 'ease', 'hold'],
+  hold: ['type', 'seconds'],
+  click: ['type', 'target', 'settle'],
+  hover: ['type', 'target', 'settle'],
+  wait: ['type', 'forSelector', 'seconds'],
+  record: ['type', 'samples', 'buttons', 'viewport', 'smoothing', 'hold'],
+};
+
+/** Levenshtein, for "did you mean" — configs are hand-edited files. */
+function editDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j];
+      row[j] = Math.min(above + 1, row[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = above;
+    }
+  }
+  return row[b.length];
+}
+
+function unknownKey(key: string, where: string, known: readonly string[]): string {
+  const near =
+    known.find((k) => k.toLowerCase() === key.toLowerCase()) ??
+    known.find((k) => editDistance(k.toLowerCase(), key.toLowerCase()) <= 2);
+  const hint = near ? ` — did you mean "${near}"?` : `. Known keys: ${known.join(', ')}`;
+  return `unknown key "${key}" in ${where}${hint}`;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Reject every key the schema doesn't know, all at once, each with a guess at
+ * the key that was meant. Non-objects where an object belongs are skipped —
+ * the resolvers report those with better messages. Two deliberate holes:
+ * `meta` is free-form (authoring tools stamp arbitrary provenance there), and
+ * a step whose `type` is unknown is left for normaliseTimeline to reject by
+ * name rather than key-by-key.
+ */
+function rejectUnknownKeys(input: Config): void {
+  const problems: string[] = [];
+  const check = (obj: unknown, where: string, known: readonly string[]): void => {
+    if (!isPlainObject(obj)) return;
+    for (const key of Object.keys(obj)) {
+      if (!known.includes(key)) problems.push(unknownKey(key, where, known));
+    }
+  };
+
+  check(input, 'the config (top level)', KNOWN_KEYS.top);
+  check(input.viewport, '"viewport"', KNOWN_KEYS.viewport);
+  check(input.auto, '"auto"', KNOWN_KEYS.auto);
+  check(input.output, '"output"', KNOWN_KEYS.output);
+  check(input.prewarm, '"prewarm"', KNOWN_KEYS.prewarm);
+  check(input.trim, '"trim"', KNOWN_KEYS.trim);
+  if (isPlainObject(input.page)) {
+    check(input.page, '"page"', KNOWN_KEYS.page);
+    check(input.page.cursor, '"page.cursor"', KNOWN_KEYS.cursor);
+    check(input.page.unlockIntro, '"page.unlockIntro"', KNOWN_KEYS.unlockIntro);
+    if (Array.isArray(input.page.substitute)) {
+      input.page.substitute.forEach((s, i) => check(s, `"page.substitute[${i}]"`, KNOWN_KEYS.substitute));
+    }
+  }
+  if (Array.isArray(input.timeline)) {
+    input.timeline.forEach((e, i) => {
+      if (!isPlainObject(e)) return;
+      const step = e as Record<string, unknown>;
+      const hasType = 'type' in step && step.type !== undefined;
+      const known = hasType ? STEP_KEYS[step.type as string] : KNOWN_KEYS.segment;
+      if (!known) return;
+      check(step, `"timeline[${i}]"`, known);
+      for (const a of ['to', 'at', 'target'] as const) {
+        if (known.includes(a)) check(step[a], `"timeline[${i}].${a}"`, KNOWN_KEYS.anchor);
+      }
+      if (step.type === 'record') {
+        check(step.samples, `"timeline[${i}].samples"`, KNOWN_KEYS.samples);
+        check(step.viewport, `"timeline[${i}].viewport"`, KNOWN_KEYS.viewport);
+        check(step.smoothing, `"timeline[${i}].smoothing"`, KNOWN_KEYS.smoothing);
+        if (Array.isArray(step.buttons)) {
+          step.buttons.forEach((b, n) => check(b, `"timeline[${i}].buttons[${n}]"`, KNOWN_KEYS.button));
+        }
+      }
+    });
+  }
+  if (problems.length > 0) throw new Error(problems.join('\n'));
+}
+
 const STEP_TYPES = ['start', 'move', 'hold', 'click', 'hover', 'wait', 'record'] as const;
 
 /** Defined in the format now so authored configs survive, executable later. */
@@ -369,6 +489,7 @@ function resolveTrim(t: Config['trim']): Resolved['trim'] {
 }
 
 export function resolveConfig(input: Config): Resolved {
+  rejectUnknownKeys(input);
   if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
     throw new Error('"timeline" must be an array');
   }

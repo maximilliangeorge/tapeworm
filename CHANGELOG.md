@@ -9,6 +9,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Unknown config keys are rejected.** A key the schema doesn't know now
+  fails config validation instead of being silently ignored — previously a
+  misspelled key (`"waitforIntro"`, say) just fell back to the default of the
+  key you meant, with nothing anywhere saying so. Every unknown key is
+  reported at once, each with a nearest-match suggestion (`did you mean
+  "waitForIntro"?`) or, failing that, the list of known keys. Checked
+  everywhere: top level, `viewport`/`output`/`prewarm`/`page`/`trim`, cursor
+  and `unlockIntro` objects, `substitute` rules, and each timeline step
+  against its own step type's fields (anchors, `record` samples/buttons/
+  smoothing included). `meta` stays free-form by design. Configs that only
+  used documented keys are unaffected.
+
 - **Trim.** `"trim": { "start?": ms, "end?": ms }` in the config cuts
   milliseconds off the ends of the finished video. The whole timeline is still
   planned — and, when the render is path-dependent (interactions, recordings,

@@ -449,3 +449,65 @@ test('trim: rejects the wrong shapes', () => {
   assert.throws(() => resolveConfig({ ...BASE, trim: { end: '1s' as never } }), /trim.end must be milliseconds >= 0/);
   assert.throws(() => resolveConfig({ ...BASE, trim: { start: NaN } }), /trim.start must be milliseconds >= 0/);
 });
+
+test('unknown keys are rejected, with the nearest known key as a suggestion', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, viewpork: {} } as never),
+    /unknown key "viewpork" in the config \(top level\) — did you mean "viewport"\?/,
+  );
+  // the classic silent failure: a case typo falling back to the default
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { waitforIntro: 15000 } } as never),
+    /unknown key "waitforIntro" in "page" — did you mean "waitForIntro"\?/,
+  );
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { cursor: { imgae: 'hand.png' } } } as never),
+    /unknown key "imgae" in "page.cursor" — did you mean "image"\?/,
+  );
+});
+
+test('an unknown key with no near miss lists the known keys instead', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { zebra: 1 } } as never),
+    /unknown key "zebra" in "page"\. Known keys: dismissConsent, hideOverlays/,
+  );
+});
+
+test('every unknown key is reported at once, not just the first', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, fsp: 30, output: { pth: 'x.mp4' } } as never),
+    (e: Error) =>
+      /unknown key "fsp" in the config \(top level\) — did you mean "fps"\?/.test(e.message) &&
+      /unknown key "pth" in "output" — did you mean "path"\?/.test(e.message),
+  );
+});
+
+test('unknown keys are checked per step type and inside anchors', () => {
+  // valid on a move, unknown on a hold
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { type: 'hold', seconds: 1, ease: 'linear' }] as never }),
+    /unknown key "ease" in "timeline\[1\]"/,
+  );
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { to: { selector: '#x', allign: 'center' } }] as never }),
+    /unknown key "allign" in "timeline\[1\]\.to" — did you mean "align"\?/,
+  );
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ at: 'top' }, { ...REC, samples: { ...REC.samples, z: [1] } }] as never }),
+    /unknown key "z" in "timeline\[1\]\.samples"/,
+  );
+  // an unknown step type is normaliseTimeline's error, not a key-by-key report
+  assert.throws(
+    () => resolveConfig({ url: BASE.url, timeline: [{ type: 'teleport', warp: 9 }] as never }),
+    /unknown step type "teleport"/,
+  );
+});
+
+test('meta is free-form and never key-checked; legacy prewarm aliases still parse', () => {
+  const r = resolveConfig({
+    ...BASE,
+    meta: { authoredWith: 'extension', anything: { goes: true } },
+    prewarm: { enabled: false },
+  });
+  assert.equal(r.prewarm.mode, 'none');
+});

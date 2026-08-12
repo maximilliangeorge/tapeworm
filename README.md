@@ -325,6 +325,69 @@ Default is `min(4, cores-1)`. Each shard renders a contiguous range into its own
 
 ---
 
+## Config reference
+
+Everything a config file can say, with defaults. The machine-readable source of truth is the `Config` type in `src/types.ts`; this section mirrors it. Configs are JSON with two mercies for hand-edited files: **full-line `//` comments and trailing commas are tolerated** (inline comments after a value are not — they break the parse).
+
+| Key | Default | |
+|---|---|---|
+| `url` | — | The page to record. Required — unless the timeline's `start` step carries a `url` (authoring tools stamp it there); if both are present they must agree. |
+| `viewport.width` | `1280` | CSS px. |
+| `viewport.height` | `800` | CSS px. |
+| `viewport.dpr` | `2` | Device pixel ratio, integer 1–4. Use 2 or 3 — see "Output" for why never 1 or fractional. |
+| `fps` | `60` | 1–240. |
+| `timeline` | — | The scroll script — entries below. Required unless `auto` is set. |
+| `auto` | `false` | `true` (or `{ "maxSections": 6 }`): discover sections and march through them instead of a timeline. |
+| `output.path` | `"out.mp4"` | An extensionless path gets `.mp4`/`.mov` appended; a `png` render is a directory. |
+| `output.codec` | from extension | `h264` (.mp4/.m4v) \| `prores` (.mov) \| `png`; `h264` when the extension says nothing. |
+| `output.crf` | `12` | H.264 quality, lower = better. |
+| `prewarm.mode` | `"full"` | `full` \| `cache` \| `none` — see "Lazy loading and scroll reveals". `cache`/`none` force `jobs: 1`. (Legacy aliases still parse: `"enabled": false` means `none`, `"reloadAfter": true` means `cache`.) |
+| `prewarm.maxHeight` | `60000` | Stop stepping past this document height (px). |
+| `prewarm.timeout` | `30000` | Give up pre-warming past this many wall-clock ms. |
+| `prewarm.imageBudget` | `400` / `1500` | Longest a frame waits for a loading image (ms): 400 in `full` (nothing should be pending), 1500 in `cache`/`none`. |
+| `trim.start`, `trim.end` | `0` | Milliseconds cut off the ends of the finished video — see "Output". |
+| `jobs` | `min(4, cores−1)` | Parallel Chromes. Forced to 1 by prewarm `cache`/`none`, by `click`/`hover`/`record` steps, and (at render time) by sync-mode provider embeds. |
+| `chromePath` | auto-detect | Path to a Chrome / chrome-headless-shell binary. |
+| `headful` | `false` | Show the browser window. |
+| `meta` | — | Provenance stamped by authoring tools (`authoredWith`, `authoredAt`, …). Ignored by the renderer. |
+
+Everything under `page` shapes the page before and during filming:
+
+| Key | Default | |
+|---|---|---|
+| `page.dismissConsent` | `true` | Try to dismiss cookie/consent dialogs (prefers "reject"). |
+| `page.hideOverlays` | `true` | Remove late-appearing fixed overlays (chat widgets, newsletter modals). |
+| `page.clock` | `"virtual"` | `virtual` runs `Date.now`/`performance.now`/rAF/timers off the frame index; `real` leaves them alone. |
+| `page.seekAnimations` | `true` | Pause and seek CSS/WAAPI animations per frame. |
+| `page.video` | `"sync"` | `sync` \| `freeze` \| `ignore` — see "Video on the page". |
+| `page.embeds` | follows `video` | Same modes for YouTube/Vimeo iframes — see "Embeds". `sync` forces `jobs: 1`. |
+| `page.cursor` | `true` | The drawn gesture cursor: `false` hides it, `{ "auto": true }` the macOS set, `{ "dot": true }` the touch disc, `{ "image": …, "tip": [x, y] }` your own sprite — each also takes `size` and `fade`. See "Recorded gestures". |
+| `page.css` | `""` | Extra CSS injected before the page's own scripts run. |
+| `page.script` | `""` | Extra JS injected before the page's own scripts run. |
+| `page.settle` | `0` | Wait this many ms after load before doing anything. |
+| `page.waitForIntro` | `8000` | Max ms to wait out intro/preloader animations; `0` disables. |
+| `page.replayIntro` | `false` | Rewind animations at capture start so the intro plays on camera. |
+| `page.unlockIntro` | `true` | Wheel through a scroll-gated intro; `false`, or `{ "maxTicks": 40, "deltaY": 400 }` to tune. |
+| `page.substitute` | `[]` | `[{ "from": "url pattern", "to": "url or file" }]` — swap assets at the network layer, see "Substituting assets". |
+
+Timeline entries are legacy segments or typed steps, mixed freely (see "Anchors, not pixels" and "Typed steps" for the semantics):
+
+| Entry | Fields |
+|---|---|
+| segment (no `type`) | `at` (first entry) or `to` (anchor), `duration?` s, `ease?`, `hold?` s. Durations derive from distance when omitted; holds default 0.8s at the ends, 0.6s between. |
+| `start` | `at` (anchor), `hold?` s, `url?`. First entry only; one is synthesized (`at: "top"`) if the timeline starts with anything else. |
+| `move` | `to` (anchor), `duration?` s, `ease?` (default `"natural"`), `hold?` s. |
+| `hold` | `seconds`. |
+| `click`, `hover` | `target` (element anchor, must be in view), `settle?` s (default 0.6). Forces `jobs: 1`. |
+| `wait` | Part of the format, not executable yet — parses, then is rejected with a clear message. |
+| `record` | `samples` (parallel arrays `t`/`x`/`y`/`s`), `buttons?`, `viewport` (required; the render refuses any other size), `smoothing?`, `hold?` s (default 0). Forces `jobs: 1`. |
+
+An anchor is `"top"`, `"bottom"`, a raw pixel offset, or `{ "selector", "align"?, "offset"?, "nth"?, "fallbackText"? }`. An ease is a name from "Motion" or a raw cubic-bezier `[x1, y1, x2, y2]`.
+
+**What's checked, and when.** A config is not statically type-checked — it's validated as it loads and plans. Every value that's read is checked with a pointed error: an unknown step type or ease name lists the known ones, malformed `record` samples name the offending sample, out-of-range numbers state the range, and local files (a cursor image, a `substitute` replacement) are resolved and checked at config time, so a typo'd path fails in seconds rather than minutes into a render. **Unknown keys are rejected too**, all reported at once, each with a guess at the key you meant (`unknown key "waitforIntro" in "page" — did you mean "waitForIntro"?`) — a misspelled key would otherwise silently fall back to the default of the key you meant, which is the worst kind of failure: nothing errors, the render just ignores you. The one deliberately unchecked place is `meta`, which is free-form by design. `--dry-run` is still the cheap way to confirm a config means what you think it does.
+
+---
+
 ## CLI
 
 ```
