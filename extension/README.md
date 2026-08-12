@@ -36,7 +36,16 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    matches. The render always captures the full viewport at that size, and
    breakpoints mean a page in a bigger window is a *different* page — so author
    at the real size. The stage collapses to a summary once the viewport
-   matches; the chip going red (and the on-page badge) reopens it.
+   matches; the chip going red reopens it.
+   Sizes no window can reach — the phone and portrait-iPad presets are taller
+   than most screens — are **emulated** instead, with the renderer's own
+   `Emulation.setDeviceMetricsOverride`: the page lays out, previews and
+   records at the exact target viewport, scaled to fit the real window with
+   input remapped through the scale, like DevTools device mode. Chrome shows
+   its "started debugging" notice while the emulation is active; Cancel on
+   that bar drops it and the chip goes red again. (This is what the
+   `debugger` permission is for — Chrome forbids requesting it on demand, so
+   it has to be granted at install.)
 3. **⟳ Warm up** (also in setup): steps through the whole page like the
    renderer's pre-warm, so lazy images load and scroll reveals fire before you
    pick.
@@ -109,12 +118,17 @@ capture time.
 ## Layout
 
 ```
-manifest.json        MV3: activeTab, scripting, storage, sidePanel — nothing else
+manifest.json        MV3: activeTab, scripting, storage, sidePanel — plus
+                     debugger, used only to emulate viewports no window can
+                     reach (Chrome forbids debugger as an optional permission,
+                     so it can't be requested on demand)
 background.js        injects on action click, opens the side panel
 icons/               the 🪱 emoji rendered to PNG at 16/32/48/128 (Apple Color
                      Emoji rasterized via a one-off AppKit script)
-content/overlay.js   viewport badge, picker, preview — chrome-free; `tapeworm
-                     author` injects this same file over CDP
+content/overlay.js   picker, preview, viewport badge (author mode only — the
+                     extension shows that state in the panel's chip instead) —
+                     chrome-free; `tapeworm author` injects this same file
+                     over CDP
 content/bridge.js    the only content file that touches chrome.*
 sidepanel/           the editor (working state in chrome.storage.session;
                      saves library + per-site autosave in chrome.storage.local)

@@ -87,7 +87,7 @@ const CSS = `
   .preview-cursor.down { background: rgba(64, 156, 255, 0.95); }
 `;
 
-function mount(onEmit) {
+function mount(onEmit, opts) {
   if (host) { emit = onEmit || emit; return; }
   emit = onEmit || emit;
   host = document.createElement('tapeworm-overlay');
@@ -97,7 +97,11 @@ function mount(onEmit) {
   style.textContent = CSS;
   shadow.appendChild(style);
 
-  els.badge = div('vp-badge');
+  // The badge is a fixed element over the page — it covers content in the
+  // corner it sits in. A host with its own viewport readout (the extension's
+  // panel chip) mounts with { badge: false }; `tapeworm author` has no panel,
+  // so the badge stays its only viewport feedback there.
+  if (!opts || opts.badge !== false) els.badge = div('vp-badge');
   els.highlight = div('highlight');
   els.tip = div('tip');
   // While a preview plays, the page scrolls under the user's REAL cursor and
@@ -114,7 +118,7 @@ function mount(onEmit) {
   els.recBanner = div('rec-banner');
   els.recBanner.textContent = 'Recording — press ESC to stop';
   els.previewCursor = div('preview-cursor');
-  shadow.append(els.badge, els.highlight, els.tip, els.shield, els.banner, els.recBanner, els.previewCursor);
+  shadow.append(...[els.badge, els.highlight, els.tip, els.shield, els.banner, els.recBanner, els.previewCursor].filter(Boolean));
   document.documentElement.appendChild(host);
 
   addEventListener('resize', onResize, { passive: true });
@@ -142,9 +146,11 @@ function destroy() {
  * The render always captures the FULL viewport at the configured size, and the
  * page reflows at that size's breakpoint — so authoring must happen in a
  * viewport that IS that size, not a crop of a bigger one. `tapeworm author`
- * emulates it exactly; the extension fits the browser window to it. This badge
- * only reports the truth: green when the viewport matches the render target,
- * red (with why it matters) when it doesn't.
+ * emulates it exactly; the extension fits the browser window to it (or
+ * emulates, when no window is big enough). The badge only reports the truth:
+ * green when the viewport matches the render target, red (with why it
+ * matters) when it doesn't. The extension mounts without the badge and shows
+ * the same state in its panel chip instead.
  */
 function viewportMatched() {
   return Math.abs(innerWidth - settings.width) <= 1 && Math.abs(innerHeight - settings.height) <= 1;

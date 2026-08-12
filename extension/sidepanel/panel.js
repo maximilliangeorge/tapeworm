@@ -211,12 +211,13 @@ function onPageInfo(d) {
     const chip = $('chip-vp');
     if (d.viewportMatched) {
       chip.className = 'chip ok';
-      chip.textContent = d.window.width + '×' + d.window.height + ' ✓';
+      chip.textContent = d.window.width + '×' + d.window.height + ' ✓' + (emulating ? ' (emulated)' : '');
       if (!prevMatched) $('setup').open = false; // setup got you here; give the timeline the space
       prevMatched = true;
     } else {
       chip.className = 'chip warn';
-      chip.textContent = d.window.width + '×' + d.window.height + ' ✗ — fit window';
+      chip.textContent = d.window.width + '×' + d.window.height + ' ✗ — ' +
+        (d.target ? 'fit to ' + d.target.width + '×' + d.target.height : 'fit window');
       if (prevMatched) $('setup').open = true; // it broke — send them back to setup
       prevMatched = false;
     }
@@ -232,8 +233,26 @@ function onPageInfo(d) {
  * resize the browser window until the page viewport equals the render target.
  * Two passes, because window chrome (tab strip, bookmarks bar) is only
  * measurable as the outer/inner difference after the first resize.
+ *
+ * When no window reaches the target — the phone and portrait-iPad presets are
+ * taller than most screens, and chrome.windows.update just clamps to the work
+ * area — fall back to what the renderer itself does (page.ts, `tapeworm
+ * author`): Emulation.setDeviceMetricsOverride, over chrome.debugger. The page
+ * then lays out and reports innerWidth/innerHeight at the exact target while
+ * Chrome scales it to fit the real window, DevTools-device-mode style — real
+ * input keeps working, remapped through the scale.
  */
 async function fitWindow() {
+  await stopEmulating(); // a live override pins the viewport — measure the real window first
+  // Sizes knowably out of range skip the window thrashing and go straight
+  // to emulation.
+  if (!resizeCanReach()) {
+    if (await emulateViewport()) {
+      const info = await send('info');
+      if (info) onPageInfo(info);
+      return;
+    }
+  }
   for (let pass = 0; pass < 2; pass++) {
     const info = await send('info');
     if (!info || !info.window) return;
@@ -250,13 +269,88 @@ async function fitWindow() {
     await new Promise((r) => setTimeout(r, 150));
   }
   const info = await send('info');
-  if (info) {
-    onPageInfo(info);
-    if (!info.viewportMatched) {
-      $('chip-vp').textContent += ' — screen too small for ' +
-        state.settings.width + '×' + state.settings.height;
-    }
+  if (!info) return;
+  onPageInfo(info);
+  if (info.viewportMatched) return;
+  if (await emulateViewport()) {
+    const after = await send('info');
+    if (after) onPageInfo(after);
   }
+}
+
+// ---------------------------------------------------------------- viewport emulation
+/**
+ * Needs the `debugger` permission, which must be install-time: Chrome
+ * forbids it in optional_permissions, so it can't be requested on demand.
+ * deviceScaleFactor 0 keeps the display's real scale: authoring never
+ * emulates dpr (the render applies it), and a real/emulated mismatch makes
+ * Chrome's hover re-evaluation hit-test the stored pointer across the two
+ * scales on any layout change (see src/browser.ts). mobile:false matches the
+ * render's own override — same layout mode, wheel scrolling intact.
+ */
+let emulating = false;    // this panel holds a device-metrics override on the tab
+let detachHooked = false; // the emulation listeners are registered
+
+/**
+ * Bounds no window resize can cross, knowable up front: Chrome won't shrink
+ * a window's web contents below ~500 CSS px of width (less the side panel —
+ * ~435 observed), and the OS work area caps how tall it can grow (~88px is
+ * the slimmest tab-strip + toolbar). The margins are deliberately loose —
+ * a wrong "reachable" guess still ends in emulateViewport() after the
+ * resize passes fail; it just thrashes the window on the way.
+ */
+function resizeCanReach() {
+  const s = state.settings;
+  return s.width >= 500 &&
+    s.height + 88 <= screen.availHeight &&
+    s.width + 8 <= screen.availWidth;
+}
+
+async function emulateViewport() {
+  const chip = $('chip-vp');
+  if (!detachHooked) {
+    detachHooked = true;
+    // Cancel on Chrome's debugging infobar (or anything else detaching us)
+    // silently drops the override — reflect the real viewport again.
+    chrome.debugger.onDetach.addListener((source) => {
+      if (!source || source.tabId !== tabId) return;
+      emulating = false;
+      send('info').then((info) => { if (info) onPageInfo(info); });
+    });
+    // Best-effort: closing the panel shouldn't leave the tab emulated.
+    window.addEventListener('pagehide', () => {
+      if (emulating) try { chrome.debugger.detach({ tabId }); } catch (e) {}
+    });
+  }
+  try {
+    try {
+      await chrome.debugger.attach({ tabId }, '1.3');
+    } catch (e) {
+      // A previous panel's attachment can survive a reopen — if the session is
+      // ours the override below just works; if it's DevTools, sendCommand throws.
+      if (!/already attached/i.test(String((e && e.message) || e))) throw e;
+    }
+    await chrome.debugger.sendCommand({ tabId }, 'Emulation.setDeviceMetricsOverride', {
+      width: state.settings.width,
+      height: state.settings.height,
+      deviceScaleFactor: 0,
+      mobile: false,
+    });
+    emulating = true;
+    return true;
+  } catch (e) {
+    chip.textContent += ' — couldn\'t emulate: ' + String((e && e.message) || e) +
+      ' (close DevTools on this tab, then Fit window again)';
+    return false;
+  }
+}
+
+/** Detaching clears every override this session set — the page reflows to the real window. */
+async function stopEmulating() {
+  if (!emulating) return;
+  emulating = false;
+  try { await chrome.debugger.detach({ tabId }); } catch (e) {}
+  await new Promise((r) => setTimeout(r, 150)); // the debugging infobar leaves; let the window settle
 }
 
 function onPreviewTime(d) {

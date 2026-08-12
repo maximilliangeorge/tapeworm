@@ -16,7 +16,9 @@ const emitToPanel = (type, data) => {
   try { chrome.runtime.sendMessage({ from: 'tapeworm-overlay', type, data }); } catch (e) {}
 };
 
-O.mount(emitToPanel);
+// badge:false — the panel's viewport chip carries that readout; the on-page
+// badge would just sit over the page being authored
+O.mount(emitToPanel, { badge: false });
 
 // MV3 has no "side panel closed" event, so the panel holds a lifeline Port
 // open for its whole lifetime (chrome.tabs.connect in panel.js) — the port
@@ -27,7 +29,7 @@ const lifelines = new Set();
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'tapeworm-lifeline') return;
   lifelines.add(port);
-  O.mount(emitToPanel);
+  O.mount(emitToPanel, { badge: false });
   port.onDisconnect.addListener(() => {
     lifelines.delete(port);
     if (lifelines.size === 0) O.destroy();

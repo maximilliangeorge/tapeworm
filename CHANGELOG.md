@@ -9,6 +9,19 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Mobile viewport presets work in the extension.** Phone 390×844 and the
+  portrait iPad presets used to dead-end at "screen too small": no browser
+  window is that tall, and `chrome.windows.update` clamps to the screen's work
+  area. **Fit window** now falls back to what the renderer already does —
+  `Emulation.setDeviceMetricsOverride` — whenever the resize can't reach the
+  target: the page lays out, previews and records at the exact configured
+  viewport, scaled to fit the real window with input remapped through the
+  scale (DevTools device-mode style). This needs the `debugger` permission,
+  now in the manifest — Chrome forbids it as an optional permission, so it
+  can't be requested on demand. Chrome shows its "started debugging" notice
+  while the emulation is active; cancelling that notice drops the emulation
+  and the viewport chip goes red again.
+
 - **Single-frame sampling.** `--frame <t>` (config `"frame"`) renders exactly
   one frame of the timeline as a single PNG file instead of a video — seconds
   in (`--frame 2.5`), or a percent (`--frame 50%`; `100%` is the last frame).
@@ -277,6 +290,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
   clock.
 
 ### Changed
+
+- Extension: the **viewport badge no longer sits on the page** — a fixed
+  overlay in the corner covered real page content while authoring. Its
+  information moved into the panel's viewport chip, which now names both
+  sizes when they disagree (`435×844 ✗ — fit to 390×844`). `tapeworm author`
+  keeps the on-page badge: it has no panel to move the readout to.
 
 - Extension: the **＋ Keyframe** button is now labelled **＋ Scroll to**, naming
   what the picked step does rather than the timeline concept behind it.

@@ -30,7 +30,9 @@ test('extension/shared/*.js are byte-identical to src/shared/*.js (else: npm run
 test('manifest stays review-friendly: minimal permissions, no host permissions, files exist', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'scripting', 'sidePanel', 'storage']);
+  // debugger is install-time by necessity: it emulates viewports no window
+  // can reach (phone presets), and Chrome forbids it in optional_permissions
+  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'debugger', 'scripting', 'sidePanel', 'storage']);
   assert.equal(manifest.host_permissions, undefined, 'no host permissions up front — injection is on demand');
   assert.equal(manifest.content_scripts, undefined, 'content scripts are injected via chrome.scripting, not declared');
   for (const rel of [manifest.background.service_worker, manifest.side_panel.default_path]) {
