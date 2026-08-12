@@ -648,6 +648,31 @@ window.__sr = {
   cursor(x, y, down) {
     drawCursor(x == null ? null : { x, y, down: !!down });
   },
+  /**
+   * Bounded wait until Chrome's hover chain reflects the pointer at (x, y).
+   *
+   * Input.dispatchMouseEvent acks when the move is queued, not when the
+   * renderer has processed it: mouse moves are rAF-aligned and coalesced, so
+   * under capture load the :hover update — and the mouseenter/leave handlers
+   * pages hang off it — can trail the dispatch by whole frames, or a short
+   * hover can be coalesced away entirely. Settled means the deepest :hover
+   * element IS the element under the point (both sides of the comparison use
+   * the same hit-testing rules, so pointer-events and shadow hosts agree).
+   * Natives throughout: the virtual rAF/timers are frozen between frames, and
+   * the real rAF is what turns the loop that flushes queued input.
+   */
+  async settlePointer(x, y, maxMs) {
+    const deadline = nPerfNow() + (maxMs == null ? 300 : maxMs);
+    for (;;) {
+      let el = null;
+      try { el = document.elementFromPoint(x, y); } catch (e) {}
+      let deepest = null;
+      try { const hs = document.querySelectorAll(':hover'); deepest = hs.length ? hs[hs.length - 1] : null; } catch (e) {}
+      if (deepest === el) return true;
+      if (nPerfNow() > deadline) return false;
+      await new Promise((r) => { nRaf(r); nSetTimeout(r, 32); });
+    }
+  },
   resolveAnchor,
   discoverSections,
   /**

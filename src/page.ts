@@ -51,8 +51,11 @@ export async function openPage(conn: Connection, cfg: Resolved): Promise<OpenRes
   await session.send('Page.setLifecycleEventsEnabled', { enabled: true });
   if (cfg.page.substitute.length > 0) await enableSubstitution(session, cfg.page.substitute);
 
-  // deviceScaleFactor here (rather than --force-device-scale-factor) is fine because
-  // Page.captureScreenshot honours the emulation override; startScreencast does not.
+  // deviceScaleFactor here sizes the screenshots (Page.captureScreenshot honours
+  // the emulation override). The launch flag --force-device-scale-factor carries
+  // the SAME value — the window's real scale must match the emulated one, or
+  // Chrome's hover re-evaluation on layout change hit-tests the stored mouse
+  // position across the two scales and hovers the wrong element (see launch()).
   await session.send('Emulation.setDeviceMetricsOverride', {
     width: cfg.width,
     height: cfg.height,

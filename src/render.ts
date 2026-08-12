@@ -27,7 +27,7 @@ export type Progress = {
 type Worker = { conn: Connection; session: Session; notes: string[] };
 
 async function startWorker(cfg: Resolved, chromePath: string): Promise<Worker> {
-  const conn = launch({ chromePath, headful: cfg.headful });
+  const conn = launch({ chromePath, headful: cfg.headful, deviceScaleFactor: cfg.dpr });
   const { session, notes } = await openPage(conn, cfg);
   const warmNotes = await prewarm(session, cfg);
   return { conn, session, notes: [...notes, ...warmNotes] };
@@ -132,6 +132,9 @@ async function performAction(
   const wasAt = await session.eval<string>('location.href').catch(() => '');
   const at = { x: Math.round(pt.x), y: Math.round(pt.y) };
   await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
+  // the move is only queued — wait until the hover state it produces exists
+  // (open-on-hover UI, :hover transitions) before pressing or capturing
+  await session.eval(`window.__sr.settlePointer(${at.x}, ${at.y})`, true, 5_000).catch(() => {});
   if (step.type === 'click') {
     await session.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...at, button: 'left', clickCount: 1 });
     await session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at, button: 'left', clickCount: 1 });
@@ -544,11 +547,15 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
                 buttons: edge.kind === 'down' ? 1 : 0,
               });
             }
-            // Force a style recalc NOW, so any CSS transition the input just
-            // triggered (:hover in or out) exists before frame() birth-stamps
-            // animations — otherwise its creation races the first
-            // seekAnimations and the birth can land a frame late.
-            await worker.session.eval('void (document.body && document.body.offsetHeight)').catch(() => {});
+            // Wait for the renderer to actually process the moves: the
+            // dispatch above acks when the event is QUEUED, and mouse moves
+            // are rAF-aligned and coalesced, so under capture load the :hover
+            // update (and the mouseenter handlers pages hang off it) trails
+            // the dispatch by whole frames — or a short hover coalesces away
+            // entirely. The frame must not capture until the hover state
+            // belongs to THIS frame's pointer, and any CSS transition it
+            // triggers must exist before frame() birth-stamps animations.
+            await worker.session.eval(`window.__sr.settlePointer(${Math.round(ptr.x)}, ${Math.round(ptr.y)})`, true, 5_000).catch(() => {});
             if (hasUp) {
               const sameDocument = await worker.session.eval<boolean>('window.__srNavProbe === true').catch(() => false);
               const nowAt = sameDocument ? await worker.session.eval<string>('location.href').catch(() => wasAt) : '';

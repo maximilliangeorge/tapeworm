@@ -82,6 +82,16 @@ export function isHeadlessShell(path: string): boolean {
 export type LaunchOptions = {
   chromePath: string;
   headful: boolean;
+  /**
+   * Real device scale factor for the browser window, matched to the render's
+   * emulated dpr. Without this the window keeps the platform's own scale
+   * (headless: 1, a Retina display: 2) while Emulation.setDeviceMetricsOverride
+   * imposes another — and Chrome's hover re-evaluation on layout change
+   * converts its stored mouse position across that mismatch, recomputing
+   * :hover at pointer × (real/emulated). Any frame where the page dirties
+   * layout then hovers the wrong element and fires enter/leave handlers there.
+   */
+  deviceScaleFactor?: number;
   /** Extra flags, appended last so they win. */
   extraArgs?: string[];
 };
@@ -115,6 +125,7 @@ export function launch(opts: LaunchOptions): Connection {
     '--disable-ipc-flooding-protection',
   ];
 
+  if (opts.deviceScaleFactor) args.push(`--force-device-scale-factor=${opts.deviceScaleFactor}`);
   if (!opts.headful) {
     if (!isHeadlessShell(opts.chromePath)) args.push('--headless=new');
   }

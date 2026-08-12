@@ -262,6 +262,21 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Hover states no longer glitch or go missing when the render dpr differs
+  from the platform's real display scale** (e.g. `--dpr 3` anywhere, or
+  `--dpr 2` in plain headless whose real scale is 1). The browser window kept
+  the platform's own device scale factor while the render emulated another,
+  and whenever the page changed layout mid-frame — a hover-triggered video
+  swap, say — Chrome re-evaluated `:hover` by converting its stored mouse
+  position across the two scales, hovering whatever sits at
+  pointer × (real ÷ emulated) and firing that element's mouseenter/leave
+  handlers on camera. Workers now launch with `--force-device-scale-factor`
+  matching the emulated dpr, and the capture loop additionally waits (bounded)
+  until the hover chain actually reflects the just-dispatched pointer before
+  filming the frame — `Input.dispatchMouseEvent` acks when the move is
+  queued, not when the renderer has processed it, so under heavy capture load
+  a frame could otherwise ship before its own hover state exists.
+
 - Extension: **the pinned starting URL is now read from the page at the moment
   the first keyframe or recording is created**, not from the panel's cached
   copy of the URL it attached on. On single-page sites, browsing to another
