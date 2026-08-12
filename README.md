@@ -292,6 +292,7 @@ One honest caveat: in `none`, image arrival is governed by the network, not the 
 - **Overlays** — chat widgets, newsletter modals — are removed if they appear after load and cover enough of the viewport. Top and bottom nav bars are deliberately kept.
 - **Hygiene CSS**: `overflow-anchor: none` (Chrome silently adjusts your scroll offset when content above changes size), `scroll-behavior: auto`, no carets, no focus rings, no selection highlight, scrollbars hidden at the browser level rather than via CSS (which would change layout width).
 - **Smooth-scroll libraries** are detected and neutralised: `lenis.stop()`, `ScrollSmoother.smooth(0)`, `ScrollTrigger.normalizeScroll(false)`. A Lenis instance is captured at construction time, since sites rarely expose one.
+- **localStorage** can be seeded before the page's own scripts run: `page.localStorage` is an object of key→value strings written into storage on the config url's origin (top frame; navigations elsewhere keep their own storage). The render's profile is pristine, so state the page keeps there — a consent choice, an intro-seen flag, a theme — is otherwise gone at render time and the page films differently than it was authored. The extension's **localStorage** setting captures the snapshot at export time; mind that a snapshot is verbatim and may contain session tokens, so only share configs you'd share the contents of. Seeding is a pure function of the config, so it doesn't affect sharding.
 - **Clocks** are virtualised — `Date.now`, `performance.now`, `requestAnimationFrame`, `setTimeout`, `setInterval` all run off the frame index. `--clock real` if this breaks a page.
 - **CSS and WAAPI animations** are paused and seeked per frame. Scroll-driven animations (`animation-timeline`) are deliberately left alone — they're a pure function of scroll offset, so setting the offset already puts them in the right place.
 
@@ -372,6 +373,7 @@ Everything under `page` shapes the page before and during filming:
 | `page.replayIntro` | `false` | Rewind animations at capture start so the intro plays on camera. |
 | `page.unlockIntro` | `true` | Wheel through a scroll-gated intro; `false`, or `{ "maxTicks": 40, "deltaY": 400 }` to tune. |
 | `page.substitute` | `[]` | `[{ "from": "url pattern", "to": "url or file" }]` — swap assets at the network layer, see "Substituting assets". |
+| `page.localStorage` | — | `{ "key": "value", … }` (strings) seeded into localStorage before the page's scripts run, on the config url's origin — see "What else it does to the page". The extension captures it with its **localStorage** setting. |
 
 Timeline entries are legacy segments or typed steps, mixed freely (see "Anchors, not pixels" and "Typed steps" for the semantics):
 

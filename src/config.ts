@@ -50,6 +50,7 @@ const KNOWN_KEYS = {
   page: [
     'dismissConsent', 'hideOverlays', 'clock', 'seekAnimations', 'cursor', 'video', 'embeds',
     'css', 'script', 'settle', 'waitForIntro', 'replayIntro', 'unlockIntro', 'substitute',
+    'localStorage',
   ],
   cursor: ['auto', 'dot', 'image', 'tip', 'size', 'fade'],
   unlockIntro: ['maxTicks', 'deltaY'],
@@ -103,9 +104,10 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * Reject every key the schema doesn't know, all at once, each with a guess at
  * the key that was meant. Non-objects where an object belongs are skipped —
  * the resolvers report those with better messages. Two deliberate holes:
- * `meta` is free-form (authoring tools stamp arbitrary provenance there), and
- * a step whose `type` is unknown is left for normaliseTimeline to reject by
- * name rather than key-by-key.
+ * `meta` is free-form (authoring tools stamp arbitrary provenance there),
+ * `page.localStorage` holds the page's own keys, and a step whose `type` is
+ * unknown is left for normaliseTimeline to reject by name rather than
+ * key-by-key.
  */
 function rejectUnknownKeys(input: Config): void {
   const problems: string[] = [];
@@ -329,6 +331,26 @@ function resolveSubstitute(subs: Array<{ from: string; to: string }> | undefined
     if (statSync(path).isDirectory()) throw new Error(`page.substitute[${i}]: replacement is a directory: ${path}`);
     return { from: s.from, to: path };
   });
+}
+
+/**
+ * localStorage stores strings, so the snapshot must already be one string per
+ * key — a number or object here means the config was assembled by hand, and
+ * silently stringifying it would make the render disagree with the page's own
+ * reading of the same key.
+ */
+function resolveLocalStorage(ls: Record<string, string> | undefined): Resolved['page']['localStorage'] {
+  if (ls === undefined) return null;
+  if (!isPlainObject(ls)) throw new Error('"page.localStorage" must be an object of string values');
+  for (const [k, v] of Object.entries(ls)) {
+    if (typeof v !== 'string') {
+      throw new Error(
+        `page.localStorage[${JSON.stringify(k)}] must be a string — localStorage stores strings; ` +
+          `JSON.stringify structured values the way the page itself would`,
+      );
+    }
+  }
+  return Object.keys(ls).length > 0 ? ls : null;
 }
 
 const CURSOR_MIME: Record<string, string> = {
@@ -640,6 +662,7 @@ export function resolveConfig(input: Config): Resolved {
         deltaY: (typeof input.page?.unlockIntro === 'object' ? input.page.unlockIntro.deltaY : undefined) ?? 400,
       },
       substitute: resolveSubstitute(input.page?.substitute, url),
+      localStorage: resolveLocalStorage(input.page?.localStorage),
     },
     frame,
     trim: resolveTrim(input.trim),

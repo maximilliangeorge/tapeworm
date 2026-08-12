@@ -545,3 +545,28 @@ test('meta is free-form and never key-checked; legacy prewarm aliases still pars
   });
   assert.equal(r.prewarm.mode, 'none');
 });
+
+test('page.localStorage resolves verbatim; its keys are the page\'s own, never "unknown"', () => {
+  const r = resolveConfig({
+    ...BASE,
+    // realistic keys — consent products and theme flags, nothing schema-like
+    page: { localStorage: { 'cookieyes-consent': 'action:yes', theme: 'dark' } },
+  });
+  assert.deepEqual(r.page.localStorage, { 'cookieyes-consent': 'action:yes', theme: 'dark' });
+});
+
+test('page.localStorage defaults to null; an empty snapshot resolves to null too', () => {
+  assert.equal(resolveConfig(BASE).page.localStorage, null);
+  assert.equal(resolveConfig({ ...BASE, page: { localStorage: {} } }).page.localStorage, null);
+});
+
+test('page.localStorage rejects non-objects and non-string values', () => {
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { localStorage: ['seen=1'] } } as never),
+    /"page.localStorage" must be an object of string values/,
+  );
+  assert.throws(
+    () => resolveConfig({ ...BASE, page: { localStorage: { visits: 3 } } } as never),
+    /page.localStorage\["visits"\] must be a string/,
+  );
+});

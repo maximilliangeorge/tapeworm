@@ -9,6 +9,19 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **localStorage capture and restore.** The render starts from a pristine
+  Chrome profile, so state a page keeps in localStorage — a dismissed cookie
+  banner, an intro-seen flag, a theme — is gone at render time and the page
+  can film differently than it was authored. `page.localStorage` in the
+  config (an object of key→value strings) now seeds those entries before the
+  page's own scripts run, on the config url's origin, top frame only.
+  The extension grew a **localStorage** checkbox in setup: when ticked, every
+  export snapshots the page's storage into the config (taken at export time,
+  skipped if the tab has navigated off the timeline's origin). Off by
+  default — the snapshot is verbatim and may contain session tokens, so it's
+  a choice, not a surprise. Seeding is a pure function of the config, so
+  sharding is unaffected.
+
 - **Mobile viewport presets work in the extension.** Phone 390×844 and the
   portrait iPad presets used to dead-end at "screen too small": no browser
   window is that tall, and `chrome.windows.update` clamps to the screen's work

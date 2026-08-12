@@ -195,6 +195,28 @@ function pageInfo() {
   };
 }
 
+/**
+ * A snapshot of the page's localStorage, for the exported config's
+ * `page.localStorage`: the render starts from a pristine profile, so state
+ * the page keeps there (consent choices, intro-seen flags, themes) films
+ * differently unless it's carried along and seeded back. The origin rides
+ * with it so the panel can refuse a snapshot taken after navigating off the
+ * timeline's start origin. Reading can throw (storage denied by site
+ * settings) — report that rather than exporting half a state.
+ */
+function storageSnapshot() {
+  const entries = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      entries[k] = localStorage.getItem(k);
+    }
+  } catch (e) {
+    return { origin: location.origin, entries: null, error: String(e) };
+  }
+  return { origin: location.origin, entries };
+}
+
 function checkGate() {
   const gated = A.maxScroll() < 8;
   if (els.banner) els.banner.style.display = gated ? 'block' : 'none';
@@ -1258,5 +1280,6 @@ globalThis.TapewormOverlay = {
   duration,
   prepare,
   assets,
+  storageSnapshot,
 };
 })();

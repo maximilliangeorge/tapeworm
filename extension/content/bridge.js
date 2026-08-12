@@ -57,6 +57,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'jump': result = O.jump(d.anchor); break;
     case 'duration': result = O.duration(d.steps); break;
     case 'assets': result = O.assets(); break;
+    case 'storage': result = O.storageSnapshot(); break;
   }
   sendResponse(result);
   return false;

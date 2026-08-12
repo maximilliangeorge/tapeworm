@@ -363,7 +363,8 @@ function onPreviewTime(d) {
 function renderSetupSum() {
   const s = state.settings;
   $('setup-sum').textContent = s.width + '×' + s.height + ' @' + s.dpr + 'x · ' + s.fps + ' fps' +
-    (s.cursorFade > 0 ? ' · cursor fade ' + s.cursorFade + 's' : '');
+    (s.cursorFade > 0 ? ' · cursor fade ' + s.cursorFade + 's' : '') +
+    (s.captureStorage ? ' · localStorage' : '');
 }
 
 function setWarmed(v) {
@@ -1005,6 +1006,14 @@ for (const [id, key] of SETTING_INPUTS) {
   });
 }
 
+// A checkbox, so not in SETTING_INPUTS (that loop reads Number(value)). The
+// overlay doesn't need to know — capture happens at export time.
+$('s-storage').addEventListener('change', async () => {
+  state.settings.captureStorage = $('s-storage').checked;
+  renderSetupSum();
+  await saveState();
+});
+
 // ---------------------------------------------------------------- export
 async function buildConfig() {
   const info = await send('info');
@@ -1012,12 +1021,23 @@ async function buildConfig() {
   const start = state.steps[0];
   const url = (start && start.type === 'start' && start.url) || (info && info.url) || currentPageUrl;
   const cursorFade = Number(state.settings.cursorFade) || 0;
+  const page = {};
+  if (cursorFade > 0) page.cursor = { fade: cursorFade };
+  if (state.settings.captureStorage) {
+    // Snapshot the page as it stands NOW — warmed up, banners dismissed — and
+    // only while the tab is still on the timeline's origin: another site's
+    // storage would seed the wrong keys into the render.
+    const st = await send('storage');
+    let sameOrigin = false;
+    try { sameOrigin = !!st && new URL(url).origin === st.origin; } catch (e) {}
+    if (sameOrigin && st.entries && Object.keys(st.entries).length > 0) page.localStorage = st.entries;
+  }
   return {
     url,
     viewport: { width: state.settings.width, height: state.settings.height, dpr: state.settings.dpr },
     fps: state.settings.fps,
-    // only when opted in — a fade-less config stays byte-identical to before
-    ...(cursorFade > 0 ? { page: { cursor: { fade: cursorFade } } } : {}),
+    // "page" only when something opted in — a plain config stays byte-identical to before
+    ...(Object.keys(page).length > 0 ? { page } : {}),
     timeline: state.steps.map(stripInternal),
     meta: {
       authoredWith: 'tapeworm-extension/0.1.0',
@@ -1138,6 +1158,7 @@ async function libraryLoad(id) {
   state.settings.cursorFade ??= 0; // saves from before the setting existed
   expandedIndex = null;
   for (const [inputId, key] of SETTING_INPUTS) $(inputId).value = String(state.settings[key]);
+  $('s-storage').checked = !!state.settings.captureStorage;
   $('codec').value = state.codec || 'h264';
   renderSetupSum();
   await send('settings', state.settings);
@@ -1307,6 +1328,7 @@ async function syncPage() {
     if (got['wip:' + dom]) { state = got['wip:' + dom]; await saveState(); }
   }
   for (const [id, key] of SETTING_INPUTS) $(id).value = String(state.settings[key]);
+  $('s-storage').checked = !!state.settings.captureStorage;
   $('codec').value = state.codec || 'h264'; // pre-codec saved states lack the field
   renderSetupSum();
   setWarmed(warmed);

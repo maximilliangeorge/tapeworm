@@ -26,7 +26,7 @@ type Booted = {
  * queue the test pumps by hand, which is exactly the control the runtime is
  * designed around.
  */
-function boot(resolved: Resolved, domOver: Record<string, unknown> = {}): Booted {
+function boot(resolved: Resolved, domOver: Record<string, unknown> = {}, winOver: Record<string, unknown> = {}): Booted {
   const rafQueue: Array<(t: number) => void> = [];
   const noopStyle = { setProperty() {} };
   const collection = () => Object.assign([], { forEach: Array.prototype.forEach });
@@ -69,7 +69,9 @@ function boot(resolved: Resolved, domOver: Record<string, unknown> = {}): Booted
       ...domOver,
     },
   };
+  Object.assign(window, winOver);
   window.window = window;
+  window.top = window; // the tests emulate the top frame
   vm.createContext(window);
   vm.runInContext(runtimeSource(resolved), window);
 
@@ -473,4 +475,41 @@ test('resolveAnchor: keywords, raw offsets, and element alignment', () => {
   assert.equal(sr.resolveAnchor({ selector: '.hero', align: 'bottom' }), 1000 + 400 - 800);
   assert.equal(sr.resolveAnchor({ selector: '.hero', offset: -50 }), 950);
   assert.throws(() => sr.resolveAnchor({ selector: '.missing' }), /matched nothing/);
+});
+
+// ---------------------------------------------------------------- storage restore
+test('page.localStorage is seeded on the config origin before anything else runs', () => {
+  const store = new Map<string, string>();
+  boot(
+    cfg({ page: { localStorage: { 'intro-seen': '1', theme: 'dark' } } }),
+    {},
+    {
+      location: { origin: 'https://example.com' },
+      localStorage: { setItem: (k: string, v: string) => store.set(k, v) },
+    },
+  );
+  assert.equal(store.get('intro-seen'), '1');
+  assert.equal(store.get('theme'), 'dark');
+});
+
+test('the snapshot stays off documents on other origins', () => {
+  const store = new Map<string, string>();
+  boot(
+    cfg({ page: { localStorage: { 'intro-seen': '1' } } }),
+    {},
+    {
+      location: { origin: 'https://elsewhere.example' },
+      localStorage: { setItem: (k: string, v: string) => store.set(k, v) },
+    },
+  );
+  assert.equal(store.size, 0);
+});
+
+test('without page.localStorage the runtime never touches storage', () => {
+  const store = new Map<string, string>();
+  boot(cfg(), {}, {
+    location: { origin: 'https://example.com' },
+    localStorage: { setItem: (k: string, v: string) => store.set(k, v) },
+  });
+  assert.equal(store.size, 0);
 });

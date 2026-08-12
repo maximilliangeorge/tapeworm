@@ -51,12 +51,28 @@ export function runtimeSource(cfg: Resolved): string {
     hideOverlays: cfg.page.hideOverlays,
     cursor: cfg.page.cursor,
     css: cfg.page.css,
+    localStorage: cfg.page.localStorage,
+    origin: new URL(cfg.url).origin,
   });
 
   return sharedCoreSource() + '\n' + embedsCoreSource() + `\n(() => {
 'use strict';
 if (window.__sr) return;
 const OPT = ${opts};
+
+// ---------------------------------------------------------------- storage restore
+// The render's profile is pristine — state the authored page kept in
+// localStorage (consent choices, intro-seen flags, themes) is gone, and the
+// page would film differently than it was authored. Seed the captured
+// snapshot before the page's own scripts run. Top frame only (same-origin
+// iframes share the origin's storage anyway), and only for documents on the
+// config url's origin — a timeline that navigates elsewhere leaves that
+// page's storage alone.
+if (OPT.localStorage && window === window.top && location.origin === OPT.origin) {
+  try {
+    for (const k of Object.keys(OPT.localStorage)) window.localStorage.setItem(k, OPT.localStorage[k]);
+  } catch (e) { /* storage can be denied (sandboxed doc, blocked cookies) — film without it */ }
+}
 
 // anchor resolution and scroll primitives come from the shared core, so the
 // authoring tools and the renderer cannot drift apart

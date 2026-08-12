@@ -91,6 +91,15 @@ seeing?* — as three states: viewport match, page warm-up, scroll gating.
    clipboard, config embedded via a stdin heredoc (`tapeworm -`). Paste it into
    a terminal at the tapeworm repo; no exported file needed. Copy JSON and
    **Start over** live behind the ⋯ menu.
+   With the **localStorage** box in setup ticked, every export also snapshots
+   the page's localStorage into `page.localStorage`, and the render seeds it
+   back before the page's scripts run — so state the page keeps there
+   (consent choices, intro-seen flags, themes) films the way you authored it
+   instead of resetting in the render's pristine profile. The snapshot is
+   taken at export time from the page as it stands, and skipped if the tab
+   has navigated off the timeline's origin. It's off by default because the
+   snapshot is verbatim: it may contain session tokens, so only export
+   configs you'd be happy to share.
 8. **Export assets** (⋯ menu) downloads `<hostname>.assets.json` — a record of
    every URL the current page has fetched (via Resource Timing, so no extra
    permissions), biggest first, with request counts and bytes where the server

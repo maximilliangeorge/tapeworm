@@ -37,6 +37,7 @@
       </label>
       <label>FPS <input id="s-fps" type="number" value="60" min="1" max="240"></label>
       <label title="Fade the recording's drawn cursor in and out over this many seconds where it appears and disappears. 0 = no fade (it pops). Applies to the preview dot and the rendered sprite.">Cursor fade (s) <input id="s-fade" type="number" value="0" min="0" max="5" step="0.05"></label>
+      <label title="Capture the page's localStorage into the exported config; the render seeds it back before the page's scripts run — so consent choices, intro-seen flags and themes film the way you authored them. Off by default: the snapshot lands in the config file verbatim and may contain session tokens — only export configs you'd be happy to share.">localStorage <input id="s-storage" type="checkbox"></label>
     </div>
     <div class="setup-row">
       <select id="preset">

@@ -276,6 +276,16 @@ export type Config = {
      * (ffmpeg -movflags +faststart).
      */
     substitute?: Array<{ from: string; to: string }>;
+    /**
+     * Seed the page's localStorage before its scripts run. The render's
+     * profile is pristine, so state the page keeps there — consent choices,
+     * intro-seen flags, themes — is gone at render time and the page can film
+     * differently than it was authored; this restores a snapshot captured at
+     * authoring time (the extension has a setting for it). Keys are free-form,
+     * values must be strings (what localStorage stores). Applied on the top
+     * frame, only for documents on the config url's origin.
+     */
+    localStorage?: Record<string, string>;
   };
   /**
    * Sample a single frame instead of rendering the video: seconds into the
@@ -367,6 +377,8 @@ export type Resolved = {
     unlockIntro: { enabled: boolean; maxTicks: number; deltaY: number };
     /** `to` is an http(s) URL, or an absolute local path verified to exist. */
     substitute: Array<{ from: string; to: string }>;
+    /** Seeded into the page before its scripts run; null = leave storage alone. */
+    localStorage: Record<string, string> | null;
   };
   /** Single-frame sampling: seconds into the timeline, or a percent of it. Null = render the video. */
   frame: { sec: number; pct?: never } | { pct: number; sec?: never } | null;
