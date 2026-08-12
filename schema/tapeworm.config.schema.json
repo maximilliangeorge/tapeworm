@@ -1,0 +1,428 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/maximilliangeorge/tapeworm/main/schema/tapeworm.config.schema.json",
+  "title": "tapeworm config",
+  "description": "A tapeworm recording: which page, what viewport, and the scroll script to film. Mirrors the Config type in src/types.ts, which remains the source of truth.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "URL or path of this schema, for editor validation. Ignored by the renderer."
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "The page to record. Required unless the timeline's start step carries a url; if both are present they must agree."
+    },
+    "viewport": { "$ref": "#/definitions/viewport" },
+    "fps": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 240,
+      "description": "Frames per second. Default 60 — scroll is the worst case for temporal aliasing."
+    },
+    "timeline": {
+      "type": "array",
+      "description": "The scroll script: legacy segments and typed steps, mixed freely. Required unless \"auto\" is set.",
+      "items": { "$ref": "#/definitions/timelineEntry" }
+    },
+    "auto": {
+      "description": "With no timeline, discover candidate sections automatically and march through them.",
+      "oneOf": [
+        { "type": "boolean" },
+        { "$ref": "#/definitions/autoOptions" }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Default \"out.mp4\". An extensionless path gets .mp4/.mov appended; a png render is a directory."
+        },
+        "codec": {
+          "enum": ["h264", "prores", "png"],
+          "description": "h264 = CRF 12 yuv444p, plays everywhere. prores = ProRes 4444 editing master. png = numbered frame sequence in a directory. Default: inferred from the path extension, else h264."
+        },
+        "crf": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Override the x264 CRF. Lower = better. Default 12."
+        }
+      }
+    },
+    "prewarm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": ["full", "cache", "none"],
+          "description": "full = step-scroll everything then film (clean, shardable; the default). cache = fill the HTTP cache, reload, film reveals on camera (jobs: 1). none = film a cold page (jobs: 1)."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Legacy alias: false means mode \"none\"."
+        },
+        "maxHeight": {
+          "type": "number",
+          "description": "Give up past this document height in px. Default 60000."
+        },
+        "timeout": {
+          "type": "number",
+          "description": "Give up past this many wall-clock ms. Default 30000."
+        },
+        "reloadAfter": {
+          "type": "boolean",
+          "description": "Legacy alias: true means mode \"cache\"."
+        },
+        "imageBudget": {
+          "type": "number",
+          "description": "Longest a frame waits for images still loading, in ms. Default 400 (full) / 1500 (cache, none)."
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dismissConsent": {
+          "type": "boolean",
+          "description": "Try to dismiss cookie/consent dialogs (prefers \"reject\"). Default true."
+        },
+        "hideOverlays": {
+          "type": "boolean",
+          "description": "Remove late-appearing fixed overlays (newsletter modals, chat widgets). Default true."
+        },
+        "clock": {
+          "enum": ["virtual", "real"],
+          "description": "virtual overrides Date.now/performance.now/rAF/timers so JS animation follows the frame index. Default \"virtual\"."
+        },
+        "seekAnimations": {
+          "type": "boolean",
+          "description": "Pause and seek CSS/WAAPI animations per frame. Default true."
+        },
+        "cursor": { "$ref": "#/definitions/cursor" },
+        "video": { "$ref": "#/definitions/videoMode" },
+        "embeds": {
+          "allOf": [{ "$ref": "#/definitions/videoMode" }],
+          "description": "Same modes for YouTube/Vimeo iframes, via their postMessage APIs — best-effort and keyframe-coarse. Defaults to \"video\"'s value. \"sync\" forces jobs: 1."
+        },
+        "css": {
+          "type": "string",
+          "description": "Extra CSS injected before the page's own scripts run."
+        },
+        "script": {
+          "type": "string",
+          "description": "Extra JS injected before the page's own scripts run."
+        },
+        "settle": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Wait this many ms after load before doing anything. Default 0."
+        },
+        "waitForIntro": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Longest to wait for intro/preloader animations to finish before filming, in ms. 0 disables. Default 8000."
+        },
+        "replayIntro": {
+          "type": "boolean",
+          "description": "true rewinds already-running animations to 0 at capture start, replaying the intro on camera. Default false."
+        },
+        "unlockIntro": {
+          "description": "When the page isn't scrollable after load (scroll-gated intro), send real wheel events until it is. Default on.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "maxTicks": { "type": "number", "description": "Most wheel events to send. Default 40." },
+                "deltaY": { "type": "number", "description": "Wheel delta per event, in px. Default 400." }
+              }
+            }
+          ]
+        },
+        "substitute": {
+          "type": "array",
+          "description": "Substitute assets during the render by intercepting their requests. The page never sees the switch.",
+          "items": { "$ref": "#/definitions/substitution" }
+        },
+        "localStorage": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Seed the page's localStorage before its scripts run (top frame, config url's origin only). Values must be strings — what localStorage stores."
+        }
+      }
+    },
+    "frame": {
+      "description": "Sample a single frame as one PNG instead of rendering the video: seconds into the timeline (2.5) or a percent of it (\"50%\").",
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        { "type": "string", "pattern": "^\\s*[0-9]*\\.?[0-9]+\\s*%?\\s*$" }
+      ]
+    },
+    "trim": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cut milliseconds off the ends of the finished video. The timeline is still planned (and walked) in full.",
+      "properties": {
+        "start": { "type": "number", "minimum": 0, "description": "Milliseconds removed from the start. Default 0." },
+        "end": { "type": "number", "minimum": 0, "description": "Milliseconds removed from the end. Default 0." }
+      }
+    },
+    "jobs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Parallel browser processes. Default min(4, cores − 1). Forced to 1 by prewarm cache/none, click/hover/record steps, and sync-mode provider embeds."
+    },
+    "chromePath": {
+      "type": "string",
+      "description": "Path to a Chrome / chrome-headless-shell binary. Default: auto-detect."
+    },
+    "meta": {
+      "type": "object",
+      "description": "Provenance stamped by authoring tools (authoredWith, authoredAt, authoredViewport, url). Free-form; ignored by the renderer."
+    },
+    "headful": {
+      "type": "boolean",
+      "description": "Show the browser window. Useful for debugging a page that fights you."
+    }
+  },
+  "definitions": {
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "description": "CSS px. Default 1280." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "description": "CSS px. Default 800." },
+        "dpr": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Device pixel ratio, integer 1–4. Use 2 or 3 — never 1 or fractional. Default 2." }
+      }
+    },
+    "autoOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxSections": { "type": "integer", "minimum": 1, "description": "Most sections to visit. Default 6." }
+      }
+    },
+    "videoMode": {
+      "enum": ["sync", "freeze", "ignore"],
+      "description": "sync = seek every <video> to the frame's timestamp (the default). freeze = pause on the poster/first frame. ignore = leave them on the wall clock (they'll look wrong)."
+    },
+    "anchor": {
+      "description": "Where to scroll to: a keyword, a raw pixel offset, or an element anchor.",
+      "oneOf": [
+        { "enum": ["top", "bottom"] },
+        { "type": "number" },
+        { "$ref": "#/definitions/elementAnchor" }
+      ]
+    },
+    "elementAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector"],
+      "properties": {
+        "selector": { "type": "string", "description": "CSS selector, resolved at capture time." },
+        "align": { "enum": ["top", "center", "bottom"], "description": "Where the element sits in the viewport. Default \"top\"." },
+        "offset": { "type": "number", "description": "Pixels added after alignment. Negative = breathing room above. Default 0." },
+        "nth": { "type": "integer", "minimum": 0, "description": "Which match to use if the selector matches several. Default 0." },
+        "fallbackText": { "type": "string", "description": "A snippet of the element's text at author time. Never used to find the element — only to improve the error when the selector matches nothing." }
+      }
+    },
+    "ease": {
+      "description": "A named easing, or a raw CSS cubic-bezier as [x1, y1, x2, y2]. \"natural\" is a flick-scroll: brief ramp to peak velocity, then friction decay.",
+      "oneOf": [
+        {
+          "enum": [
+            "linear", "natural",
+            "inOutSine", "inOutQuad", "inOutCubic", "inOutQuart", "inOutQuint", "inOutExpo",
+            "outSine", "outQuad", "outCubic", "outQuart", "outQuint", "outExpo"
+          ]
+        },
+        { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+      ]
+    },
+    "cursor": {
+      "description": "The cursor drawn during recorded-gesture replay (screenshots never contain the real pointer). true = the built-in arrow, false = none. Give only one of auto / dot / image.",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "auto": { "const": true, "description": "The bundled macOS cursor set, switching sprite per frame with the CSS cursor under the pointer." },
+            "dot": { "const": true, "description": "The preview-style touch disc, centred on the point." },
+            "image": { "type": "string", "description": "Your own sprite: a local image path (png/svg/gif/jpeg/webp), or an https:// or data: URL." },
+            "tip": {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[x, y] px inside the rendered sprite where the pointer tip sits. Requires image. Default [0, 0]."
+            },
+            "size": { "type": "number", "exclusiveMinimum": 0, "description": "Rendered width in CSS px (the dot's diameter; auto scales the whole set off the arrow's width)." },
+            "fade": { "type": "number", "minimum": 0, "description": "Seconds the sprite fades in/out instead of popping. Default 0." }
+          }
+        }
+      ]
+    },
+    "substitution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string", "description": "URL wildcard pattern (* matches any run of characters, ? any single one) matched against the full request URL." },
+        "to": { "type": "string", "description": "The replacement: an https URL, or a local file path served with Range support. Substituted videos need the moov atom up front (ffmpeg -movflags +faststart)." }
+      }
+    },
+    "timelineEntry": {
+      "oneOf": [
+        { "$ref": "#/definitions/segment" },
+        { "$ref": "#/definitions/stepStart" },
+        { "$ref": "#/definitions/stepMove" },
+        { "$ref": "#/definitions/stepHold" },
+        { "$ref": "#/definitions/stepClick" },
+        { "$ref": "#/definitions/stepHover" },
+        { "$ref": "#/definitions/stepWait" },
+        { "$ref": "#/definitions/stepRecord" }
+      ]
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Legacy timeline entry (no \"type\"). The first provides the starting position via \"at\"; later ones need a \"to\".",
+      "properties": {
+        "to": { "$ref": "#/definitions/anchor" },
+        "at": { "$ref": "#/definitions/anchor" },
+        "duration": { "type": "number", "exclusiveMinimum": 0, "description": "Seconds of travel. Omitted = derived from distance." },
+        "ease": { "$ref": "#/definitions/ease" },
+        "hold": { "type": "number", "minimum": 0, "description": "Seconds to dwell after arriving. Default 0.8 on the first and last, else 0.6." }
+      }
+    },
+    "stepStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "at"],
+      "description": "Where the timeline begins. First entry only; one is synthesized (at: \"top\") if the timeline starts with anything else.",
+      "properties": {
+        "type": { "const": "start" },
+        "at": { "$ref": "#/definitions/anchor" },
+        "hold": { "type": "number", "minimum": 0, "description": "Seconds to dwell before moving. Default 0.8." },
+        "url": { "type": "string", "format": "uri", "description": "Pins where the timeline begins — stamped by authoring tools. Must agree with (or replace) the top-level url." }
+      }
+    },
+    "stepMove": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "to"],
+      "properties": {
+        "type": { "const": "move" },
+        "to": { "$ref": "#/definitions/anchor" },
+        "duration": { "type": "number", "exclusiveMinimum": 0, "description": "Seconds of travel. Omitted = derived from distance." },
+        "ease": { "$ref": "#/definitions/ease" },
+        "hold": { "type": "number", "minimum": 0, "description": "Seconds to dwell after arriving. Default 0.6 (0.8 on the last step)." }
+      }
+    },
+    "stepHold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "seconds"],
+      "properties": {
+        "type": { "const": "hold" },
+        "seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "stepClick": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "target"],
+      "description": "Click an element (must be in view). Forces jobs: 1.",
+      "properties": {
+        "type": { "const": "click" },
+        "target": { "$ref": "#/definitions/elementAnchor" },
+        "settle": { "type": "number", "minimum": 0, "description": "Seconds to let the page react. Default 0.6." }
+      }
+    },
+    "stepHover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "target"],
+      "description": "Hover an element (must be in view). Forces jobs: 1.",
+      "properties": {
+        "type": { "const": "hover" },
+        "target": { "$ref": "#/definitions/elementAnchor" },
+        "settle": { "type": "number", "minimum": 0, "description": "Seconds to let the page react. Default 0.6." }
+      }
+    },
+    "stepWait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "description": "Part of the format, not executable yet — parses, then is rejected with a clear message.",
+      "properties": {
+        "type": { "const": "wait" },
+        "forSelector": { "type": "string" },
+        "seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "stepRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "samples", "viewport"],
+      "description": "A recorded gesture, captured by an authoring tool and replayed verbatim through Chrome's input pipeline. Forces jobs: 1.",
+      "properties": {
+        "type": { "const": "record" },
+        "samples": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["t", "x", "y", "s"],
+          "description": "Parallel arrays, one entry per sample.",
+          "properties": {
+            "t": { "type": "array", "items": { "type": "number" }, "minItems": 2, "description": "ms from recording start, non-decreasing." },
+            "x": { "type": "array", "items": { "type": "number" }, "minItems": 2, "description": "Pointer x in viewport CSS px." },
+            "y": { "type": "array", "items": { "type": "number" }, "minItems": 2, "description": "Pointer y in viewport CSS px." },
+            "s": { "type": "array", "items": { "type": "number" }, "minItems": 2, "description": "window.scrollY." }
+          }
+        },
+        "buttons": {
+          "type": "array",
+          "description": "Sparse left-button edges, chronological; the first must be \"down\".",
+          "items": { "$ref": "#/definitions/buttonEdge" }
+        },
+        "smoothing": {
+          "description": "Opt-in cursor smoothing: resolve the pointer path through a zero-phase Gaussian kernel. true means strength 0.5. Pinned to the raw positions at button edges and the take's ends; scroll is never smoothed.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "denoise" },
+                "strength": { "type": "number", "minimum": 0, "maximum": 1, "description": "Scales the kernel width. Default 0.5." }
+              }
+            }
+          ]
+        },
+        "viewport": {
+          "type": "object",
+          "allOf": [{ "$ref": "#/definitions/viewport" }],
+          "required": ["width", "height"],
+          "description": "The viewport this was recorded at. A render at a different size is refused — breakpoints make it a different page."
+        },
+        "hold": { "type": "number", "minimum": 0, "description": "Seconds to dwell after the replay ends. Default 0." }
+      }
+    },
+    "buttonEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "action"],
+      "properties": {
+        "t": { "type": "number", "minimum": 0, "description": "ms from recording start; must fall inside the samples." },
+        "action": { "enum": ["down", "up"] }
+      }
+    }
+  }
+}

@@ -40,9 +40,12 @@ export function loadConfig(path: string): Config {
  * keeps its default, and nothing fails until you notice the render ignored
  * you — so key names are rejected outright. Only NAMES are judged here;
  * shapes and values keep their pointed errors in the resolvers below.
+ *
+ * Exported (with STEP_KEYS) so the test suite can hold the published JSON
+ * Schema (schema/tapeworm.config.schema.json) to the same key lists.
  */
-const KNOWN_KEYS = {
-  top: ['url', 'viewport', 'fps', 'timeline', 'auto', 'output', 'prewarm', 'page', 'frame', 'trim', 'jobs', 'chromePath', 'meta', 'headful'],
+export const KNOWN_KEYS = {
+  top: ['$schema', 'url', 'viewport', 'fps', 'timeline', 'auto', 'output', 'prewarm', 'page', 'frame', 'trim', 'jobs', 'chromePath', 'meta', 'headful'],
   viewport: ['width', 'height', 'dpr'],
   auto: ['maxSections'],
   output: ['path', 'codec', 'crf'],
@@ -63,7 +66,7 @@ const KNOWN_KEYS = {
   smoothing: ['mode', 'strength'],
 } as const;
 
-const STEP_KEYS: Record<string, readonly string[]> = {
+export const STEP_KEYS: Record<string, readonly string[]> = {
   start: ['type', 'at', 'hold', 'url'],
   move: ['type', 'to', 'duration', 'ease', 'hold'],
   hold: ['type', 'seconds'],

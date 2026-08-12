@@ -1,4 +1,5 @@
 {
+  "$schema": "./schema/tapeworm.config.schema.json",
   "url": "https://www.thetalentgroup.eu/production-designers/",
   "viewport": {
     "width": 1366,
@@ -7,7 +8,7 @@
   },
   "fps": 60,
   "trim": {
-    "start": 4000
+    "start": 700
   },
   "page": {
     "cursor": { "auto": true }

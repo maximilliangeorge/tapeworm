@@ -21,6 +21,7 @@
     "src",
     "examples",
     "extension",
+    "schema",
     "README.md"
   ],
   "license": "MIT",

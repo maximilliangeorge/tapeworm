@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AUTO_CURSORS, loadConfig, parseConfig, resolveConfig } from '../src/config.ts';
+import { AUTO_CURSORS, KNOWN_KEYS, STEP_KEYS, loadConfig, parseConfig, resolveConfig } from '../src/config.ts';
 import type { Config } from '../src/types.ts';
 
 const BASE: Config = { url: 'https://example.com', timeline: [{ at: 'top' }, { to: 'bottom' }] };
@@ -569,4 +569,58 @@ test('page.localStorage rejects non-objects and non-string values', () => {
     () => resolveConfig({ ...BASE, page: { localStorage: { visits: 3 } } } as never),
     /page.localStorage\["visits"\] must be a string/,
   );
+});
+
+test('"$schema" is a known key, accepted and ignored', () => {
+  const r = resolveConfig({ ...BASE, $schema: './schema/tapeworm.config.schema.json' });
+  assert.equal(r.url, BASE.url);
+  // a near-miss still gets the suggestion treatment
+  assert.throws(
+    () => resolveConfig({ ...BASE, schema: 'x' } as never),
+    /unknown key "schema" in the config \(top level\) — did you mean "\$schema"\?/,
+  );
+});
+
+test('the published JSON Schema knows exactly the keys the validator knows', () => {
+  const schema = JSON.parse(
+    readFileSync(new URL('../schema/tapeworm.config.schema.json', import.meta.url), 'utf8'),
+  ) as {
+    properties: Record<string, { properties?: Record<string, unknown>; oneOf?: Array<{ properties?: Record<string, unknown> }> }>;
+    definitions: Record<string, { properties?: Record<string, unknown>; oneOf?: Array<{ properties?: Record<string, unknown>; $ref?: string }> }>;
+  };
+  const defs = schema.definitions;
+  const keysOf = (obj: { properties?: Record<string, unknown> } | undefined): string[] =>
+    Object.keys(obj?.properties ?? {}).sort();
+  const expect = (where: string, got: string[], want: readonly string[]) =>
+    assert.deepEqual(got, [...want].sort(), `schema keys for ${where} drifted from KNOWN_KEYS`);
+
+  expect('top', Object.keys(schema.properties).sort(), KNOWN_KEYS.top);
+  expect('viewport', keysOf(defs.viewport), KNOWN_KEYS.viewport);
+  expect('auto', keysOf(defs.autoOptions), KNOWN_KEYS.auto);
+  expect('output', keysOf(schema.properties.output), KNOWN_KEYS.output);
+  expect('prewarm', keysOf(schema.properties.prewarm), KNOWN_KEYS.prewarm);
+  expect('page', keysOf(schema.properties.page), KNOWN_KEYS.page);
+  expect('trim', keysOf(schema.properties.trim), KNOWN_KEYS.trim);
+  expect('cursor', keysOf(defs.cursor.oneOf?.[1]), KNOWN_KEYS.cursor);
+  const page = schema.properties.page.properties as Record<string, { oneOf?: Array<{ properties?: Record<string, unknown> }> }>;
+  expect('unlockIntro', keysOf(page.unlockIntro.oneOf?.[1]), KNOWN_KEYS.unlockIntro);
+  expect('substitute', keysOf(defs.substitution), KNOWN_KEYS.substitute);
+  expect('anchor', keysOf(defs.elementAnchor), KNOWN_KEYS.anchor);
+  expect('segment', keysOf(defs.segment), KNOWN_KEYS.segment);
+
+  // every step type, exactly once, plus the legacy segment, in the entry union
+  const entryRefs = (defs.timelineEntry.oneOf ?? []).map((v) => v.$ref);
+  const stepDef = (type: string) => `step${type[0].toUpperCase()}${type.slice(1)}`;
+  assert.deepEqual(
+    [...entryRefs].sort(),
+    ['#/definitions/segment', ...Object.keys(STEP_KEYS).map((t) => `#/definitions/${stepDef(t)}`)].sort(),
+  );
+  for (const [type, keys] of Object.entries(STEP_KEYS)) {
+    expect(`step "${type}"`, keysOf(defs[stepDef(type)]), keys);
+  }
+
+  const record = defs.stepRecord.properties as Record<string, { properties?: Record<string, unknown>; oneOf?: Array<{ properties?: Record<string, unknown> }> }>;
+  expect('samples', keysOf(record.samples), KNOWN_KEYS.samples);
+  expect('buttons', keysOf(defs.buttonEdge), KNOWN_KEYS.button);
+  expect('smoothing', keysOf(record.smoothing.oneOf?.[1]), KNOWN_KEYS.smoothing);
 });

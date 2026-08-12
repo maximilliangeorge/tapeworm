@@ -9,6 +9,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **A JSON Schema for config files.** `schema/tapeworm.config.schema.json`
+  describes the full config format, so editors validate and autocomplete a
+  config as you type. Point at it with a top-level `"$schema"` — a new known
+  key, accepted and ignored by the renderer — using the published URL
+  (`https://raw.githubusercontent.com/maximilliangeorge/tapeworm/main/schema/tapeworm.config.schema.json`)
+  or a relative path. The extension stamps it into every exported config, and
+  a test holds the schema's key lists to the validator's, so the two can't
+  drift apart silently.
+
 - **localStorage capture and restore.** The render starts from a pristine
   Chrome profile, so state a page keeps in localStorage — a dismissed cookie
   banner, an intro-seen flag, a theme — is gone at render time and the page

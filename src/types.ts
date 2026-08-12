@@ -127,6 +127,12 @@ export type VideoMode =
   | 'ignore';
 
 export type Config = {
+  /**
+   * URL or path of the config's JSON Schema
+   * (schema/tapeworm.config.schema.json), so editors validate and autocomplete
+   * the file. Ignored by the renderer.
+   */
+  $schema?: string;
   url: string;
   viewport?: {
     /** CSS pixels. Default 1280. */

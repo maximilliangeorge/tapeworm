@@ -1033,6 +1033,8 @@ async function buildConfig() {
     if (sameOrigin && st.entries && Object.keys(st.entries).length > 0) page.localStorage = st.entries;
   }
   return {
+    // so editors validate and autocomplete the downloaded file
+    $schema: 'https://raw.githubusercontent.com/maximilliangeorge/tapeworm/main/schema/tapeworm.config.schema.json',
     url,
     viewport: { width: state.settings.width, height: state.settings.height, dpr: state.settings.dpr },
     fps: state.settings.fps,

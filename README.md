@@ -330,10 +330,11 @@ Default is `min(4, cores-1)`. Each shard renders a contiguous range into its own
 
 ## Config reference
 
-Everything a config file can say, with defaults. The machine-readable source of truth is the `Config` type in `src/types.ts`; this section mirrors it. Configs are JSON with two mercies for hand-edited files: **full-line `//` comments and trailing commas are tolerated** (inline comments after a value are not — they break the parse).
+Everything a config file can say, with defaults. The machine-readable source of truth is the `Config` type in `src/types.ts`; this section mirrors it, and so does a published [JSON Schema](schema/tapeworm.config.schema.json) — point a top-level `"$schema"` at it and your editor validates and autocompletes the config as you type. Configs are JSON with two mercies for hand-edited files: **full-line `//` comments and trailing commas are tolerated** (inline comments after a value are not — they break the parse).
 
 | Key | Default | |
 |---|---|---|
+| `$schema` | — | URL or path of the config's JSON Schema, for editors: `https://raw.githubusercontent.com/maximilliangeorge/tapeworm/main/schema/tapeworm.config.schema.json` (or a relative path to `schema/tapeworm.config.schema.json`). Ignored by the renderer; the extension stamps it into every export. |
 | `url` | — | The page to record. Required — unless the timeline's `start` step carries a `url` (authoring tools stamp it there); if both are present they must agree. |
 | `viewport.width` | `1280` | CSS px. |
 | `viewport.height` | `800` | CSS px. |
@@ -494,6 +495,7 @@ Set `TAPEWORM_DEBUG=1` to see Chrome's stderr, and `--headful` to watch it work.
 bin/tapeworm.ts   CLI: arg parsing, progress, output
 src/types.ts       config schema — the source of truth for what's configurable
 src/config.ts      defaults + validation
+schema/            the same schema as JSON Schema, for editor validation ($schema)
 src/cdp.ts         minimal CDP client over --remote-debugging-pipe (no deps)
 src/browser.ts     finding and launching Chrome, and the flags that matter
 src/runtime.ts     the in-page runtime: clock, video, animations, scroll, hygiene
