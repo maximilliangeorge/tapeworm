@@ -431,3 +431,21 @@ test('loadConfig tolerates // comments and trailing commas, rejects garbage', ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('trim: defaults to zero and resolves ms values', () => {
+  assert.deepEqual(resolveConfig(BASE).trim, { startMs: 0, endMs: 0 });
+  assert.deepEqual(
+    resolveConfig({ ...BASE, trim: { start: 1000, end: 500 } }).trim,
+    { startMs: 1000, endMs: 500 },
+  );
+  assert.deepEqual(resolveConfig({ ...BASE, trim: { start: 250 } }).trim, { startMs: 250, endMs: 0 });
+  assert.deepEqual(resolveConfig({ ...BASE, trim: {} }).trim, { startMs: 0, endMs: 0 });
+});
+
+test('trim: rejects the wrong shapes', () => {
+  assert.throws(() => resolveConfig({ ...BASE, trim: 1000 as never }), /"trim" must be an object/);
+  assert.throws(() => resolveConfig({ ...BASE, trim: [1000] as never }), /"trim" must be an object/);
+  assert.throws(() => resolveConfig({ ...BASE, trim: { start: -1 } }), /trim.start must be milliseconds >= 0/);
+  assert.throws(() => resolveConfig({ ...BASE, trim: { end: '1s' as never } }), /trim.end must be milliseconds >= 0/);
+  assert.throws(() => resolveConfig({ ...BASE, trim: { start: NaN } }), /trim.start must be milliseconds >= 0/);
+});

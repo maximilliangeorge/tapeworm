@@ -9,6 +9,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Trim.** `"trim": { "start?": ms, "end?": ms }` in the config cuts
+  milliseconds off the ends of the finished video. The whole timeline is still
+  planned — and, when the render is path-dependent (interactions, recordings,
+  prewarm `cache`/`none`), still walked so the page state stays right — but
+  only the kept frames are captured and encoded, so the output is identical to
+  rendering everything and cutting the file afterwards. A trim that leaves
+  nothing is refused up front.
+
 - **macOS cursors, chosen per frame.** `page.cursor` now accepts
   `{ "auto": true, "size?": px }`: the render draws the macOS cursor set
   (SVGs bundled in `assets/cursors/`, vendored from

@@ -278,6 +278,18 @@ export type Config = {
     substitute?: Array<{ from: string; to: string }>;
   };
   /**
+   * Cut milliseconds off the ends of the finished video. The whole timeline is
+   * still planned (and, when the render is path-dependent, walked) — trimming
+   * only drops the trimmed frames from the output, so what remains is
+   * identical to rendering everything and cutting the file afterwards.
+   */
+  trim?: {
+    /** Milliseconds removed from the start. Default 0. */
+    start?: number;
+    /** Milliseconds removed from the end. Default 0. */
+    end?: number;
+  };
+  /**
    * Render in N parallel browser processes. Frames are independent because every
    * time-dependent thing is seeked, so this is a near-linear speedup.
    * Default: min(4, cpus-1).
@@ -346,6 +358,7 @@ export type Resolved = {
     /** `to` is an http(s) URL, or an absolute local path verified to exist. */
     substitute: Array<{ from: string; to: string }>;
   };
+  trim: { startMs: number; endMs: number };
   jobs: number;
   chromePath: string | null;
   headful: boolean;

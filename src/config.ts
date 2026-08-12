@@ -353,6 +353,21 @@ function resolveCursor(
   return { image, tipX: tip[0], tipY: tip[1], size, fade };
 }
 
+function resolveTrim(t: Config['trim']): Resolved['trim'] {
+  if (t === undefined) return { startMs: 0, endMs: 0 };
+  if (!t || typeof t !== 'object' || Array.isArray(t)) {
+    throw new Error('"trim" must be an object: { start?: ms, end?: ms }');
+  }
+  const ms = (v: unknown, k: string): number => {
+    if (v === undefined) return 0;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      throw new Error(`trim.${k} must be milliseconds >= 0`);
+    }
+    return v;
+  };
+  return { startMs: ms(t.start, 'start'), endMs: ms(t.end, 'end') };
+}
+
 export function resolveConfig(input: Config): Resolved {
   if (input.timeline !== undefined && !Array.isArray(input.timeline)) {
     throw new Error('"timeline" must be an array');
@@ -479,6 +494,7 @@ export function resolveConfig(input: Config): Resolved {
       },
       substitute: resolveSubstitute(input.page?.substitute, url),
     },
+    trim: resolveTrim(input.trim),
     // 'cache' and 'none' film reveals as they happen, and reveal state depends on the
     // path taken to get there — a shard that jumps straight to frame 400 would show
     // different reveals than one that scrolled through. So those modes are single-job.

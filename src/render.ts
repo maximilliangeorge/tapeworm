@@ -15,7 +15,7 @@ import type { Connection, Session } from './cdp.ts';
 import { concatSegments, createEncoder, createPngWriter, type Encoder } from './encode.ts';
 import { openPage, prewarm, resetPage, settleNewDocument, sleep, waitForDocumentReady, waitForSoftNavigation } from './page.ts';
 import { strobeThreshold } from './easing.ts';
-import { buildTrack, cursorAlphas, peakStep, type Track } from './timeline.ts';
+import { buildTrack, cursorAlphas, peakStep, trimRange, type Track } from './timeline.ts';
 import type { Resolved, Step } from './types.ts';
 
 export type Progress = {
@@ -39,6 +39,11 @@ async function startWorker(cfg: Resolved, chromePath: string): Promise<Worker> {
  * A NaN offset is a FREE frame — one where the page owns the scroll (a router
  * transition is playing). No offset is imposed and no drift is checked, because
  * whatever the page does with the scroll during its transition is the content.
+ *
+ * `screenshot: false` renders the frame without capturing it — the page is
+ * still scrolled, the virtual clock still advances, images are still awaited —
+ * which is how a path-dependent render walks frames that trim drops from the
+ * output.
  */
 async function captureFrame(
   session: Session,
@@ -46,6 +51,7 @@ async function captureFrame(
   tSec: number,
   cfg: Resolved,
   cursor?: { x: number; y: number; down: boolean; alpha?: number } | null,
+  screenshot = true,
 ): Promise<Buffer> {
   const free = Number.isNaN(y);
   const cursorArg = cursor === undefined ? '' : `, ${JSON.stringify(cursor)}`;
@@ -63,6 +69,8 @@ async function captureFrame(
       throw new ScrollDrift(result.requested, result.actual);
     }
   }
+
+  if (!screenshot) return Buffer.alloc(0);
 
   const shot = await session.send<{ data: string }>(
     'Page.captureScreenshot',
@@ -293,6 +301,18 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   }
 
   const total = track.offsets.length;
+  // Trim narrows which frames reach the output; it never changes what any
+  // frame CONTAINS. Frame indices stay absolute, so everything time-seeked
+  // renders exactly as it would untrimmed.
+  let trimmed: { first: number; last: number };
+  try {
+    trimmed = trimRange(total, cfg.fps, cfg.trim);
+  } catch (e) {
+    lead.conn.close();
+    throw e;
+  }
+  const { first: trimFirst, last: trimLast } = trimmed;
+  const captureTotal = trimLast - trimFirst;
   const peak = peakStep(track, cfg.dpr);
   const metrics = await lead.session.eval<any>('window.__sr.metrics()').catch(() => null);
   const notes: string[] = [...lead.notes];
@@ -352,6 +372,13 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
     } catch { /* the probe is advisory; never fail the render on it */ }
   }
 
+  if (trimFirst > 0 || trimLast < total) {
+    notes.push(
+      `trim keeps ${(trimFirst / cfg.fps).toFixed(2)}s–${(trimLast / cfg.fps).toFixed(2)}s of the ` +
+        `${(total / cfg.fps).toFixed(2)}s timeline (${captureTotal} of ${total} frames)`,
+    );
+  }
+
   if (track.sequential) {
     const parts: string[] = [];
     if (track.actions.length > 0) {
@@ -372,7 +399,7 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   // Provider embeds buffer per worker and seek keyframe-coarse, so a shard
   // boundary can land inside an embed on a different frame than a continuous
   // pass would — take the deterministic single worker over the parallelism.
-  let jobs = Math.max(1, Math.min(cfg.jobs, Math.ceil(total / 15)));
+  let jobs = Math.max(1, Math.min(cfg.jobs, Math.ceil(captureTotal / 15)));
   if (jobs > 1 && cfg.page.embeds === 'sync' && (metrics?.embeds ?? 0) > 0) {
     notes.push(
       `${metrics.embeds} provider embed${metrics.embeds === 1 ? '' : 's'} — rendering with a single worker so ` +
@@ -404,9 +431,19 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
     workers.push(...extra);
   }
 
-  // Contiguous ranges, so each shard's ffmpeg segment is a valid clip on its own.
-  const per = Math.ceil(total / jobs);
-  const ranges = workers.map((_, i) => [i * per, Math.min((i + 1) * per, total)] as const).filter(([a, b]) => a < b);
+  // Contiguous ranges over the kept frames, so each shard's ffmpeg segment is
+  // a valid clip on its own.
+  const per = Math.ceil(captureTotal / jobs);
+  const ranges = workers
+    .map((_, i) => [trimFirst + i * per, Math.min(trimFirst + (i + 1) * per, trimLast)] as const)
+    .filter(([a, b]) => a < b);
+
+  // A path-dependent render (interactions, a recording, prewarm cache/none —
+  // all single-job) can't jump straight to the first kept frame: frame N shows
+  // what the frames before it did to the page. Its one shard walks the
+  // trimmed-off head too — input dispatched, scroll imposed, virtual clock
+  // advanced — and only skips the screenshot/encode there.
+  const pathDependent = track.sequential || cfg.prewarm.mode !== 'full';
 
   let done = 0;
   const started = Date.now();
@@ -425,15 +462,16 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         const isPng = cfg.codec === 'png';
         const segPath = join(tmp, `seg${String(shard).padStart(2, '0')}.mp4`);
         const enc: Encoder = isPng
-          ? createPngWriter(cfg.outPath, from)
+          ? createPngWriter(cfg.outPath, from - trimFirst)
           : createEncoder(segPath, cfg);
         if (!isPng) segments[shard] = segPath;
+        const walkFrom = shard === 0 && pathDependent ? 0 : from;
         await worker.session.eval(`window.__sr.beginCapture(${cfg.page.replayIntro})`).catch(() => {});
         // Bounded wait for provider-embed handshakes plus one priming seek to
         // this shard's first frame, so it doesn't land on a cold player.
         // Instant no-op when the page has no embeds; the caps keep it far
         // under captureFrame's eval timeout.
-        await worker.session.eval(`window.__sr.embedsReady(4000, ${from / cfg.fps})`, true, 8_000).catch(() => {});
+        await worker.session.eval(`window.__sr.embedsReady(4000, ${walkFrom / cfg.fps})`, true, 8_000).catch(() => {});
 
         // Scroll offset the pointer is sitting at after an interaction or a
         // recorded frame, or null when it's parked. The pointer stays put
@@ -446,7 +484,8 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
         let pointerAt: number | null = null;
         let cursorShown = false;
         let lastSprite: { x: number; y: number; down: boolean } | null = null;
-        for (let n = from; n < to; n++) {
+        for (let n = walkFrom; n < to; n++) {
+          const capturing = n >= from;
           const y = track.offsets[n];
           const t = n / cfg.fps;
           for (const action of track.actions) {
@@ -555,20 +594,21 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
           }
           let png: Buffer;
           try {
-            png = await captureFrame(worker.session, y, t, cfg, cursor);
+            png = await captureFrame(worker.session, y, t, cfg, cursor, capturing);
           } catch (e) {
             if (e instanceof ScrollDrift) {
               if (drift.length < 3) drift.push(`frame ${n}: ${e.message}`);
               // Re-assert and take the frame anyway — one drifted frame is better
               // than no render, and the note tells you it happened.
               await worker.session.eval(`window.__sr.setScroll(${y})`).catch(() => {});
-              png = await captureFrame(worker.session, y, t, cfg, cursor).catch(() => Buffer.alloc(0));
-              if (png.length === 0) throw e;
+              png = await captureFrame(worker.session, y, t, cfg, cursor, capturing).catch(() => Buffer.alloc(0));
+              if (capturing && png.length === 0) throw e;
             } else throw e;
           }
+          if (!capturing) continue;
           await enc.write(png);
           done++;
-          progress.onFrame?.(done, total);
+          progress.onFrame?.(done, captureTotal);
         }
         await enc.finish();
       }),
@@ -585,5 +625,5 @@ export async function render(cfg: Resolved, chromePath: string, progress: Progre
   for (const d of drift) note(d);
   if (drift.length) note('scroll drift usually means scroll-snap, scroll anchoring, or a smooth-scroll library — see README');
 
-  return { frames: total, seconds: (Date.now() - started) / 1000, outPath: cfg.outPath };
+  return { frames: captureTotal, seconds: (Date.now() - started) / 1000, outPath: cfg.outPath };
 }

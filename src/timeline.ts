@@ -299,6 +299,24 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
 }
 
 /**
+ * The frame range trimming keeps: [first, last). Frame indices — and so every
+ * time-seeked thing — stay absolute: a trimmed render captures the SAME frames
+ * the full render would, minus the ends, exactly as if the finished video had
+ * been cut afterwards.
+ */
+export function trimRange(total: number, fps: number, trim: { startMs: number; endMs: number }): { first: number; last: number } {
+  const first = Math.round((trim.startMs / 1000) * fps);
+  const last = total - Math.round((trim.endMs / 1000) * fps);
+  if (last - first < 1) {
+    throw new Error(
+      `trim leaves nothing: the timeline runs ${(total / fps).toFixed(2)}s (${total} frames) but trim ` +
+        `cuts ${(trim.startMs / 1000).toFixed(2)}s from the start and ${(trim.endMs / 1000).toFixed(2)}s from the end`,
+    );
+  }
+  return { first, last };
+}
+
+/**
  * Per-frame opacity for the drawn cursor sprite, so it fades in when it
  * appears and out before it disappears instead of popping. Everything is a
  * pure function of the frame index — the core invariant — so it first replays

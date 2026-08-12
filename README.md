@@ -307,6 +307,8 @@ One honest caveat: in `none`, image arrival is governed by the network, not the 
 
 Frames come out of Chrome as lossless PNG, so the encode is the only lossy step. If you have your own compression pipeline, render ProRes or PNG and feed it that.
 
+**Trimming.** `"trim": { "start": 1000, "end": 500 }` cuts milliseconds off the ends of the finished video (either side optional, default 0). The whole timeline is still planned, and nothing time-seeked shifts — the output is exactly what you'd get by rendering everything and cutting the file afterwards, so it's the way to drop the opening hold or the last dwell without re-authoring the timeline. Trimmed-off frames aren't captured or encoded; a path-dependent render (interactions, recordings, prewarm `cache`/`none`) still walks through them off camera so the page state stays right. A trim that leaves nothing is refused before rendering starts.
+
 **Use `--dpr 2` or `3`, never a fractional value.** Chrome stores scroll offsets on the device-pixel grid, so your effective scroll quantum is `1/dpr` CSS pixels. At DPR 1 you get integers only, and an eased curve's slow tails oscillate between 0 and 1 px per frame — visible stutter exactly where the motion should feel smoothest. Fractional DPRs quantise unevenly, which is worse. This is why 2× matters for *motion*, not just sharpness.
 
 ---

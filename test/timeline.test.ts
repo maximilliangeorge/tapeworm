@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, cursorAlphas, peakStep, type Track } from '../src/timeline.ts';
+import { buildTrack, cursorAlphas, peakStep, trimRange, type Track } from '../src/timeline.ts';
 import { resolveConfig } from '../src/config.ts';
 import type { Session } from '../src/cdp.ts';
 import type { Resolved, TimelineEntry } from '../src/types.ts';
@@ -497,4 +497,18 @@ test('cursorAlphas: a free frame (NaN — a route transition owns the scroll) en
   ];
   const a = cursorAlphas(fadeTrack(spec), 10, 0.2);
   assert.deepEqual(a.slice(4, 8), [2 / 3, 1 / 3, 0, 0], 'fades out into the free frames');
+});
+
+test('trimRange: converts ms to frames and keeps [first, last)', () => {
+  assert.deepEqual(trimRange(600, 60, { startMs: 1000, endMs: 500 }), { first: 60, last: 570 });
+  assert.deepEqual(trimRange(600, 60, { startMs: 0, endMs: 0 }), { first: 0, last: 600 });
+  // rounds to the nearest frame, not the floor
+  assert.deepEqual(trimRange(600, 60, { startMs: 25, endMs: 25 }), { first: 2, last: 598 });
+});
+
+test('trimRange: refuses a trim that leaves nothing', () => {
+  assert.throws(() => trimRange(120, 60, { startMs: 1000, endMs: 1000 }), /trim leaves nothing/);
+  assert.throws(() => trimRange(120, 60, { startMs: 2000, endMs: 0 }), /trim leaves nothing/);
+  // exactly one frame left is still a video
+  assert.deepEqual(trimRange(120, 60, { startMs: 1000, endMs: 983 }), { first: 60, last: 61 });
 });
