@@ -232,6 +232,18 @@ Honest caveats, because this path is best-effort where the native one is exact:
 
 `from` is a URL wildcard (`*` matches any run of characters, `?` a single one) matched against the full request URL — note that's anchored, so end with `*` if the URL carries a query string. To find the URL to match, use the extension's **Export assets** (⋯ menu): it downloads a JSON record of every URL the page fetched, biggest first. `to` is either an https URL or a local file path (relative to the working directory, checked at config time). It works the way DevTools "local overrides" does, invisibly to the page: a remote replacement is fetched in the original request's place, and a local file is served straight from disk at the interception layer, with full HTTP Range support — so a substituted video still seeks per frame. The interception survives navigation, applies during pre-warm and `cache`-mode reloads, and is a pure function of the URL, so it doesn't affect sharding.
 
+A rule is global by default: it applies no matter which page the render is on. When a timeline clicks through to other pages, an optional `on` scopes the rule to one of them — a wildcard matched against the top document's path (same `*`/`?` semantics, anchored), or against its full URL when the pattern carries a scheme:
+
+```json
+"substitute": [
+  { "from": "*/hero.mp4", "to": "./home-hero.mp4",    "on": "/" },
+  { "from": "*/hero.mp4", "to": "./pricing-hero.mp4", "on": "/pricing*" },
+  { "from": "*/bg-music.mp3", "to": "./silence.mp3" }
+]
+```
+
+Scoped and global rules mix freely; the first matching rule wins, so put scoped rules before a global fallback for the same asset. Scoping tracks real and History-API navigations alike, and a navigation's own document request is matched against the URL it's navigating *to*. Local files served under a scoped rule are marked uncacheable (the same URL may need a different answer on the next page); a *remote* `to` can't be — Chrome may reuse its cached response across pages if the server allows caching — so prefer local files for scoped rules.
+
 Caveats: the replacement video must itself be seekable (mp4 with the `moov` atom up front — `ffmpeg -movflags +faststart`); a shorter replacement freezes on its last frame once the timeline seeks past its end, and a different aspect ratio letterboxes per the page's `object-fit`; a remote replacement must be `https` when the page is (Chrome refuses the downgrade — the config says so upfront); and `blob:` sources (MSE players — HLS/DASH) can't be swapped by URL, since the media element's URL isn't the network request.
 
 ---
@@ -387,7 +399,7 @@ Everything under `page` shapes the page before and during filming:
 | `page.waitForIntro` | `8000` | Max ms to wait out intro/preloader animations; `0` disables. |
 | `page.replayIntro` | `false` | Rewind animations at capture start so the intro plays on camera. |
 | `page.unlockIntro` | `true` | Wheel through a scroll-gated intro; `false`, or `{ "maxTicks": 40, "deltaY": 400 }` to tune. |
-| `page.substitute` | `[]` | `[{ "from": "url pattern", "to": "url or file" }]` — swap assets at the network layer, see "Substituting assets". |
+| `page.substitute` | `[]` | `[{ "from": "url pattern", "to": "url or file", "on": "page path (optional)" }]` — swap assets at the network layer, see "Substituting assets". |
 | `page.localStorage` | — | `{ "key": "value", … }` (strings) seeded into localStorage before the page's scripts run, on the config url's origin — see "What else it does to the page". The extension captures it with its **localStorage** setting. |
 
 Timeline entries are legacy segments or typed steps, mixed freely (see "Anchors, not pixels" and "Typed steps" for the semantics):

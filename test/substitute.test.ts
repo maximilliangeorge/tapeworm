@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fulfillFromFile, isUrl, parseRange, wildcardToRegExp } from '../src/substitute.ts';
+import { compileScope, fulfillFromFile, isUrl, parseRange, wildcardToRegExp } from '../src/substitute.ts';
 
 test('wildcardToRegExp: * spans, ? is one char, regex specials are literal', () => {
   const hero = wildcardToRegExp('*/hero.mp4');
@@ -13,6 +13,24 @@ test('wildcardToRegExp: * spans, ? is one char, regex specials are literal', () 
   assert.ok(!hero.test('https://cdn.example.com/heroXmp4'), '. must be literal');
   assert.ok(wildcardToRegExp('https://example.com/v?.mp4').test('https://example.com/v1.mp4'));
   assert.ok(!wildcardToRegExp('https://example.com/v?.mp4').test('https://example.com/v12.mp4'));
+});
+
+test('compileScope: pathname wildcards for schemeless patterns, full URL otherwise', () => {
+  const pricing = compileScope('/pricing*');
+  assert.ok(pricing('https://example.com/pricing'));
+  assert.ok(pricing('https://example.com/pricing/enterprise'));
+  assert.ok(pricing('https://other.example/pricing?plan=pro'), 'pathname matching ignores host and query');
+  assert.ok(!pricing('https://example.com/about'));
+
+  const exact = compileScope('/');
+  assert.ok(exact('https://example.com/'));
+  assert.ok(!exact('https://example.com/about'), 'anchored, like from');
+
+  const full = compileScope('https://example.com/pricing*');
+  assert.ok(full('https://example.com/pricing?plan=pro'));
+  assert.ok(!full('https://other.example/pricing'), 'a scheme in the pattern means full-URL matching');
+
+  assert.ok(!pricing('not a url'), 'unparseable document URL never matches');
 });
 
 test('isUrl separates remote replacements from local paths', () => {
@@ -48,7 +66,11 @@ test('fulfillFromFile: whole file, range slice, and 416', async (t) => {
   assert.equal(header(whole, 'Content-Type'), 'video/mp4');
   assert.equal(header(whole, 'Accept-Ranges'), 'bytes');
   assert.equal(header(whole, 'Content-Length'), '10');
+  assert.equal(header(whole, 'Cache-Control'), 'public, max-age=3600');
   assert.equal(Buffer.from(whole.body, 'base64').toString(), 'ABCDEFGHIJ');
+
+  const scoped = await fulfillFromFile(file, undefined, false);
+  assert.equal(header(scoped, 'Cache-Control'), 'no-store', 'page-scoped responses must not outlive their page');
 
   const mid = await fulfillFromFile(file, 'bytes=2-5');
   assert.equal(mid.responseCode, 206);

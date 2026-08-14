@@ -280,6 +280,13 @@ test('page.substitute: validated and resolved; local files must exist at config 
     () => sub([{ from: '*/hero.mp4', to: 'http://cdn.example.com/a.mp4' }]),
     /can't be given an http:\/\/ replacement/,
   );
+  assert.throws(() => sub([{ from: '*', to: 'https://example.com/a.mp4', on: '' }]), /page\.substitute\[0\]\.on must be/);
+  assert.throws(() => sub([{ from: '*', to: 'https://example.com/a.mp4', on: 42 }]), /page\.substitute\[0\]\.on must be/);
+  assert.throws(
+    () => sub([{ from: '*', to: 'https://example.com/a.mp4', on: 'pricing' }]),
+    /would never match/,
+    'a schemeless scope is matched against the pathname, which starts with /',
+  );
 
   // A remote replacement passes through untouched; a local one resolves absolute.
   const dir = mkdtempSync(join(tmpdir(), 'tapeworm-test-'));
@@ -288,10 +295,11 @@ test('page.substitute: validated and resolved; local files must exist at config 
     writeFileSync(file, 'x');
     const r = sub([
       { from: '*/hero.mp4', to: 'https://example.com/other.mp4' },
-      { from: '*/promo.webm', to: file },
+      { from: '*/promo.webm', to: file, on: '/pricing*' },
     ]);
-    assert.deepEqual(r.page.substitute[0], { from: '*/hero.mp4', to: 'https://example.com/other.mp4' });
+    assert.deepEqual(r.page.substitute[0], { from: '*/hero.mp4', to: 'https://example.com/other.mp4', on: null });
     assert.equal(r.page.substitute[1].to, file);
+    assert.equal(r.page.substitute[1].on, '/pricing*');
     assert.throws(() => sub([{ from: '*', to: dir }]), /replacement is a directory/);
   } finally {
     rmSync(dir, { recursive: true, force: true });

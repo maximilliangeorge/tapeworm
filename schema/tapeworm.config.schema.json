@@ -298,7 +298,8 @@
       "required": ["from", "to"],
       "properties": {
         "from": { "type": "string", "description": "URL wildcard pattern (* matches any run of characters, ? any single one) matched against the full request URL." },
-        "to": { "type": "string", "description": "The replacement: an https URL, or a local file path served with Range support. Substituted videos need the moov atom up front (ffmpeg -movflags +faststart)." }
+        "to": { "type": "string", "description": "The replacement: an https URL, or a local file path served with Range support. Substituted videos need the moov atom up front (ffmpeg -movflags +faststart)." },
+        "on": { "type": "string", "description": "Optional page scope: a wildcard matched against the top document's path (\"/pricing*\"), or its full URL when the pattern carries a scheme. Without it the rule is global. First matching rule wins." }
       }
     },
     "timelineEntry": {

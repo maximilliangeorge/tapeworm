@@ -3,7 +3,7 @@
 import type { Connection, Session } from './cdp.ts';
 import { newPage } from './cdp.ts';
 import { runtimeSource } from './runtime.ts';
-import { fulfillFromFile, isUrl, wildcardToRegExp } from './substitute.ts';
+import { compileScope, fulfillFromFile, isUrl, wildcardToRegExp } from './substitute.ts';
 import type { Resolved } from './types.ts';
 
 export type OpenResult = { session: Session; notes: string[] };
@@ -19,20 +19,52 @@ export type OpenResult = { session: Session; notes: string[] };
  * sweep, 'cache'-mode reloads, and navigating clicks all stay covered.
  * Substitution is a pure function of the URL — no wall-clock or frame-order
  * dependence — so it doesn't break sharding.
+ *
+ * A rule with a page scope (`on`) additionally conditions on the top document's
+ * URL, so a timeline that navigates can substitute the same asset differently
+ * per page. Still deterministic: the document at any frame is fixed by the
+ * timeline. The document is tracked from navigation events — frameNavigated for
+ * real navigations, navigatedWithinDocument for History-API ones — except for
+ * the top document request itself, which is matched against its own URL: it
+ * pauses before the navigation commits, when the tracker still holds the page
+ * being left.
  */
 async function enableSubstitution(session: Session, subs: Resolved['page']['substitute']): Promise<void> {
-  const rules = subs.map((s) => ({ re: wildcardToRegExp(s.from), to: s.to, local: !isUrl(s.to) }));
-  session.on('Fetch.requestPaused', (p: { requestId: string; request: { url: string; headers: Record<string, string> } }) => {
+  const rules = subs.map((s) => ({
+    re: wildcardToRegExp(s.from),
+    to: s.to,
+    local: !isUrl(s.to),
+    scope: s.on ? compileScope(s.on) : null,
+  }));
+
+  let topFrame: string | null = null;
+  let docUrl = '';
+  if (rules.some((r) => r.scope)) {
+    const { frameTree } = await session.send<{ frameTree: { frame: { id: string; url: string } } }>('Page.getFrameTree');
+    topFrame = frameTree.frame.id;
+    docUrl = frameTree.frame.url;
+    session.on('Page.frameNavigated', (p: { frame: { id: string; url: string; parentId?: string } }) => {
+      if (!p.frame.parentId) { topFrame = p.frame.id; docUrl = p.frame.url; }
+    });
+    session.on('Page.navigatedWithinDocument', (p: { frameId: string; url: string }) => {
+      if (p.frameId === topFrame) docUrl = p.url;
+    });
+  }
+
+  session.on('Fetch.requestPaused', (p: { requestId: string; frameId?: string; resourceType?: string; request: { url: string; headers: Record<string, string> } }) => {
     // fire-and-forget throughout: awaiting would serialise paused requests behind us
     const send = (method: string, params: object) => session.send(method, params).catch(() => {});
-    const hit = rules.find((r) => r.re.test(p.request.url));
+    const pageUrl = p.resourceType === 'Document' && p.frameId === topFrame ? p.request.url : docUrl;
+    const hit = rules.find((r) => r.re.test(p.request.url) && (!r.scope || r.scope(pageUrl)));
     if (!hit) {
       send('Fetch.continueRequest', { requestId: p.requestId });
     } else if (!hit.local) {
       send('Fetch.continueRequest', { requestId: p.requestId, url: hit.to });
     } else {
       const range = Object.entries(p.request.headers).find(([k]) => k.toLowerCase() === 'range')?.[1];
-      fulfillFromFile(hit.to, range).then(
+      // Scoped responses are uncacheable: the same URL may be answered
+      // differently once the page navigates to another path.
+      fulfillFromFile(hit.to, range, !hit.scope).then(
         (f) => send('Fetch.fulfillRequest', { requestId: p.requestId, ...f }),
         // unreadable file (deleted since config time?) — let the real asset through
         () => send('Fetch.continueRequest', { requestId: p.requestId }),

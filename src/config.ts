@@ -58,7 +58,7 @@ export const KNOWN_KEYS = {
   ],
   cursor: ['auto', 'dot', 'image', 'tip', 'size', 'fade'],
   unlockIntro: ['maxTicks', 'deltaY'],
-  substitute: ['from', 'to'],
+  substitute: ['from', 'to', 'on'],
   trim: ['start', 'end'],
   anchor: ['selector', 'align', 'offset', 'nth', 'fallbackText'],
   segment: ['to', 'at', 'duration', 'ease', 'hold'],
@@ -312,12 +312,26 @@ function validateRecord(e: Step & { type: 'record' }, i: number): void {
  * Local replacements are checked at config time, not when the first request
  * matches mid-render — a typo'd path should fail in seconds, not minutes.
  */
-function resolveSubstitute(subs: Array<{ from: string; to: string }> | undefined, pageUrl: string): Resolved['page']['substitute'] {
+function resolveSubstitute(subs: Array<{ from: string; to: string; on?: string }> | undefined, pageUrl: string): Resolved['page']['substitute'] {
   if (subs === undefined) return [];
   if (!Array.isArray(subs)) throw new Error('"page.substitute" must be an array of { from, to }');
   return subs.map((s, i) => {
     if (!s || typeof s !== 'object' || typeof s.from !== 'string' || s.from === '' || typeof s.to !== 'string' || s.to === '') {
       throw new Error(`page.substitute[${i}] must be { from: "url pattern", to: "url or file path" }`);
+    }
+    const on = s.on ?? null;
+    if (on !== null) {
+      if (typeof on !== 'string' || on === '') {
+        throw new Error(`page.substitute[${i}].on must be a non-empty page wildcard ("/pricing*", or a full URL)`);
+      }
+      // A pattern with no scheme is matched against the document's pathname,
+      // which always starts with "/" — anything else can never match.
+      if (!/:\/\//.test(on) && !on.startsWith('/') && !on.startsWith('*')) {
+        throw new Error(
+          `page.substitute[${i}].on: "${on}" would never match — a page path starts with "/" ` +
+            `(e.g. "/pricing*"), or give a full-URL wildcard (https://…)`,
+        );
+      }
     }
     if (/^https?:\/\//.test(s.to)) {
       // Chrome refuses to rewrite a request from a secure page to an insecure
@@ -329,12 +343,12 @@ function resolveSubstitute(subs: Array<{ from: string; to: string }> | undefined
             `Chrome blocks the downgrade. Use an https URL, or a local file.`,
         );
       }
-      return { from: s.from, to: s.to };
+      return { from: s.from, to: s.to, on };
     }
     const path = resolvePath(s.to);
     if (!existsSync(path)) throw new Error(`page.substitute[${i}]: replacement file not found: ${path}`);
     if (statSync(path).isDirectory()) throw new Error(`page.substitute[${i}]: replacement is a directory: ${path}`);
-    return { from: s.from, to: path };
+    return { from: s.from, to: path, on };
   });
 }
 

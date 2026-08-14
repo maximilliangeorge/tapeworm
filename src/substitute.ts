@@ -31,6 +31,24 @@ export function wildcardToRegExp(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`);
 }
 
+/**
+ * Compile a rule's page scope (`on`): a wildcard over the top document's
+ * pathname when it starts with `/` (or `*`), or over the full document URL
+ * when the pattern carries a scheme. Returns a predicate over the document
+ * URL the request was made from.
+ */
+export function compileScope(on: string): (docUrl: string) => boolean {
+  const re = wildcardToRegExp(on);
+  if (/:\/\//.test(on)) return (docUrl) => re.test(docUrl);
+  return (docUrl) => {
+    try {
+      return re.test(new URL(docUrl).pathname);
+    } catch {
+      return false;
+    }
+  };
+}
+
 const MIME: Record<string, string> = {
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
@@ -87,7 +105,7 @@ export type Fulfillment = {
  * first request a <video> makes) buffers the whole file — fine for the asset
  * sizes this is for, worth knowing for anything enormous.
  */
-export async function fulfillFromFile(path: string, rangeHeader: string | undefined): Promise<Fulfillment> {
+export async function fulfillFromFile(path: string, rangeHeader: string | undefined, cacheable = true): Promise<Fulfillment> {
   const size = statSync(path).size;
   const range = parseRange(rangeHeader, size);
   if (range === 'unsatisfiable') {
@@ -113,8 +131,9 @@ export async function fulfillFromFile(path: string, rangeHeader: string | undefi
     { name: 'Accept-Ranges', value: 'bytes' },
     { name: 'Content-Length', value: String(length) },
     // The replacement is the same bytes for every request, so let prewarm
-    // 'cache' mode do its job.
-    { name: 'Cache-Control', value: 'public, max-age=3600' },
+    // 'cache' mode do its job. Page-scoped rules can answer the same URL
+    // differently on another path, so their responses must never be cached.
+    { name: 'Cache-Control', value: cacheable ? 'public, max-age=3600' : 'no-store' },
   ];
   if (range) headers.push({ name: 'Content-Range', value: `bytes ${start}-${end}/${size}` });
   return { responseCode: range ? 206 : 200, responseHeaders: headers, body: buf.toString('base64') };

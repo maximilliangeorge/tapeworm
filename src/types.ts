@@ -294,8 +294,15 @@ export type Config = {
      * substituted <video> seek). The page never sees the switch. Substituted
      * videos must be seekable — mp4 with the moov atom up front
      * (ffmpeg -movflags +faststart).
+     *
+     * A rule is global by default: it applies no matter which document the
+     * page is showing. `on` scopes it to a page — a wildcard matched against
+     * the top document's path (`"/pricing*"`), or against its full URL when
+     * it carries a scheme — so a timeline that clicks through to another page
+     * can substitute the same asset URL differently per page. Scoped and
+     * global rules mix freely; first matching rule wins.
      */
-    substitute?: Array<{ from: string; to: string }>;
+    substitute?: Array<{ from: string; to: string; on?: string }>;
     /**
      * Seed the page's localStorage before its scripts run. The render's
      * profile is pristine, so state the page keeps there — consent choices,
@@ -416,8 +423,8 @@ export type Resolved = {
     waitForIntro: number;
     replayIntro: boolean;
     unlockIntro: { enabled: boolean; maxTicks: number; deltaY: number };
-    /** `to` is an http(s) URL, or an absolute local path verified to exist. */
-    substitute: Array<{ from: string; to: string }>;
+    /** `to` is an http(s) URL, or an absolute local path verified to exist; `on` is the page scope, null = global. */
+    substitute: Array<{ from: string; to: string; on: string | null }>;
     /** Seeded into the page before its scripts run; null = leave storage alone. */
     localStorage: Record<string, string> | null;
   };

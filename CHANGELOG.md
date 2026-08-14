@@ -9,6 +9,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Page-scoped asset substitution (`page.substitute[].on`).** A substitute
+  rule can now carry `on` — a wildcard over the top document's path
+  (`"/pricing*"`), or its full URL when the pattern has a scheme — so it only
+  applies while the render is on that page. Global (unscoped) rules behave as
+  before, the two mix freely, and the first matching rule wins; a timeline
+  that clicks through to another page can substitute the same asset URL
+  differently per page. Locally served scoped responses are marked
+  uncacheable so a substitute can't leak across pages via the HTTP cache.
+
 - **Seeded `Math.random` (`page.seedRandom`, CLI `--seed-random[=n]`).** Opt-in:
   stubs `Math.random` with a seeded PRNG so a page that randomises — particle
   fields, shuffled testimonials, generative art — films the same way every run.
