@@ -460,7 +460,9 @@ function rulerSeek(ev) {
 
 $('ruler').addEventListener('pointerdown', (ev) => {
   if (state.steps.length < 2) return;
-  if (playing) { playing = false; $('play').textContent = '▶ Preview'; }
+  // scrubbing stops playback (the seek below stops the overlay's preview, and
+  // no preview:ended will follow) — release everything Play claimed
+  if (playing) { playing = false; $('play').textContent = '▶ Preview'; $('arm-record').disabled = false; }
   $('ruler').setPointerCapture(ev.pointerId);
   rulerSeek(ev);
 });
@@ -821,12 +823,12 @@ async function armPicker(mode) {
     return;
   }
   setPicking(mode);
-  if (mode === 'record') {
-    const r = await send('record:start');
-    if (!r || r.error) setPicking(null); // preview playing, or the page went away
-  } else {
-    await send('picker:start', { mode });
-  }
+  const type = mode === 'record' ? 'record:start' : 'picker:start';
+  let r = await send(type, { mode });
+  // null means the content scripts are GONE (a reload took them), not a
+  // refusal — re-inject and try once more before giving up.
+  if (!r && await healAttach()) r = await send(type, { mode });
+  if (!r || r.error) setPicking(null); // preview playing, or the page went away
 }
 
 $('pick').addEventListener('click', () => armPicker('move'));
@@ -899,12 +901,16 @@ async function returnToStart() {
   const start = state.steps[0];
   const startUrl = (start && start.type === 'start' && start.url) || '';
   if (!startUrl) return true; // nothing pinned yet — play where we are
-  const info = await send('info');
+  let info = await send('info');
+  // no answer = the scripts died with a navigation the panel missed — heal
+  // before trusting the stale currentPageUrl to say "already there"
+  if (!info && await healAttach()) info = await send('info');
   const here = (info && info.url) || currentPageUrl;
-  if (here && samePage(here, startUrl)) return true;
+  if (here && samePage(here, startUrl)) return !!info;
 
   $('play').disabled = true;
   $('play').textContent = '⟳ Returning…';
+  internalNavs++;
   try {
     await new Promise((resolve) => {
       const onUpdated = (id, changed) => {
@@ -934,6 +940,7 @@ async function returnToStart() {
     await syncPage();
     return true;
   } finally {
+    internalNavs--;
     $('play').disabled = state.steps.length < 2;
     $('play').textContent = '▶ Preview';
   }
@@ -950,7 +957,10 @@ $('play').addEventListener('click', async () => {
   }
   if (!(await returnToStart())) return;
   lastPreviewT = 0;
-  const r = await send('preview:play', { steps: state.steps.map(stripInternal) });
+  let r = await send('preview:play', { steps: state.steps.map(stripInternal) });
+  // no answer = scripts gone (nothing pinned yet, so returnToStart never
+  // probed the page) — re-inject and try once more
+  if (!r && await healAttach()) r = await send('preview:play', { steps: state.steps.map(stripInternal) });
   if (r) { playing = true; $('play').textContent = '■ Stop'; $('arm-record').disabled = true; }
 });
 
@@ -993,6 +1003,50 @@ chrome.tabs.onUpdated.addListener((id, changed) => {
     if (r) $('play').textContent = '■ Stop';
     else { playing = false; $('play').textContent = '▶ Preview'; $('arm-record').disabled = false; }
   })().finally(() => { followingNav = false; });
+});
+
+/**
+ * Any navigation the panel didn't drive — a plain reload (the natural move
+ * after previewed clicks, whose effects persist), a link click between takes,
+ * a preview click whose navigation lands after preview:ended — destroys the
+ * content scripts, and nothing above re-injects them. Every button then dies
+ * silently: sends return null and the panel can't tell "refused" from "gone".
+ * So: whenever the authoring tab finishes a load the panel isn't already
+ * following, re-inject and resync. The scripts' install guards make a
+ * still-alive page a no-op, and a same-origin navigation keeps the activeTab
+ * grant, so a refresh heals invisibly. A cross-origin destination can't be
+ * injected — say so instead of flickering.
+ */
+let internalNavs = 0; // loads returnToStart drives (and re-injects after) itself
+let healing = false;
+
+async function healAttach() {
+  if (tabId == null || healing) return false;
+  healing = true;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+  } catch (e) {
+    $('inject-msg').textContent = 'The page navigated and Tapeworm couldn\'t re-attach: ' +
+      String((e && e.message) || e) + ' — click the Tapeworm toolbar icon on this page to re-grant access.';
+    $('inject-note').hidden = false;
+    healing = false;
+    return false;
+  }
+  $('inject-note').hidden = true;
+  setWarmed(false); // a load got us here: reveals and lazy content are untriggered again
+  await syncPage();
+  healing = false;
+  return true;
+}
+
+chrome.tabs.onUpdated.addListener((id, changed) => {
+  if (id !== tabId || changed.status !== 'complete') return;
+  // These paths re-inject themselves: returnToStart (internalNavs), the
+  // mid-preview follower (followingNav), the record-split follower (picking
+  // stays 'record' until it resumes or is disarmed).
+  if (internalNavs > 0 || followingNav || picking === 'record') return;
+  if (picking) setPicking(null); // an armed picker died with the old document
+  void healAttach();
 });
 
 for (const [id, key] of SETTING_INPUTS) {

@@ -324,6 +324,28 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Extension: **the panel now survives page reloads and unfollowed navigations
+  instead of going dead.** The overlay is injected programmatically (there are
+  no manifest content scripts), so refreshing the page — the natural move
+  after previewed clicks, whose effects persist — or clicking a link between
+  takes destroyed it, and the panel had no way to notice: Record flickered
+  from armed straight back to passive, the keyframe pickers armed but the page
+  never showed a picker, and Preview could silently do nothing (it trusted a
+  stale cached URL to conclude it was already on the start page). Only
+  reopening the panel from the toolbar icon recovered. The panel now
+  re-injects and resyncs whenever the authoring tab finishes a load it isn't
+  already following (injection is idempotent, and same-origin navigations keep
+  the activeTab grant), retries a failed arm/preview once through that same
+  heal, and reports cross-origin destinations it can't reach instead of
+  failing silently. A recording cut short by a manual reload keeps its take,
+  and the panel re-attaches on the reloaded page.
+
+- Extension: **scrubbing the ruler while a preview plays no longer leaves the
+  Record button permanently disabled.** Grabbing the scrubber stops playback,
+  but only a preview that ended (or was stopped with the Stop button)
+  re-enabled Record — the scrub path forgot to, and the overlay's stop-by-seek
+  never announces an end. Scrubbing now releases everything Play claimed.
+
 - **Hover states no longer glitch or go missing when the render dpr differs
   from the platform's real display scale** (e.g. `--dpr 3` anywhere, or
   `--dpr 2` in plain headless whose real scale is 1). The browser window kept

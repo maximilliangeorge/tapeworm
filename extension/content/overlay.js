@@ -269,9 +269,10 @@ function assets() {
 function onScrollOrGate() { checkGate(); }
 
 // ---------------------------------------------------------------- picker
+// returns a truthy ack: the panel needs to tell "armed" from "no overlay here"
 function startPicker(mode) {
   pickMode = mode === 'click' || mode === 'hover' ? mode : 'move';
-  if (picking) return;
+  if (picking) return { picking: true };
   picking = true;
   addEventListener('mousemove', onPickMove, true);
   addEventListener('click', onPickClick, true);
@@ -280,6 +281,7 @@ function startPicker(mode) {
   // is no hovered element — don't leave the last tooltip stranded
   document.documentElement.addEventListener('mouseleave', hidePickerHover, true);
   addEventListener('blur', hidePickerHover);
+  return { picking: true };
 }
 
 function stopPicker() {
