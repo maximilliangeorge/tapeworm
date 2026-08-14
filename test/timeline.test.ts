@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, cursorAlphas, frameIndex, peakStep, trimRange, type Track } from '../src/timeline.ts';
+import { buildTrack, cursorAlphas, frameIndex, peakStep, segmentStart, trimRange, type Track } from '../src/timeline.ts';
 import { resolveConfig } from '../src/config.ts';
 import type { Session } from '../src/cdp.ts';
 import type { Resolved, TimelineEntry } from '../src/types.ts';
@@ -533,4 +533,70 @@ test('frameIndex: percent maps 0..100 onto first..last', () => {
   assert.equal(frameIndex(600, 60, { pct: 100 }), 599);
   assert.equal(frameIndex(600, 60, { pct: 50 }), 300);
   assert.equal(frameIndex(1, 60, { pct: 100 }), 0);
+});
+
+test('a click that loads a new document stamps its action with the destination URL', async () => {
+  let onNewPage = false;
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      if (a === 'top') return 0;
+      if (a.selector === '.destination') return onNewPage ? 1200 : undefined;
+      return undefined;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: 'a.nav' }, settle: 1 },
+    { type: 'move', to: { selector: '.destination' }, duration: 1, ease: 'linear', hold: 0.5 },
+  ]);
+  const track = await buildTrack(session, cfg, {
+    perform: async () => {
+      onNewPage = true;
+      return { navigated: true, sameDocument: false, url: 'https://example.com/next' };
+    },
+  });
+  assert.equal(track.actions[0].hardNavUrl, 'https://example.com/next');
+});
+
+test('a soft navigation is NOT a segment boundary — the document survives it', async () => {
+  let onNewPage = false;
+  const session = {
+    async eval(expr: string) {
+      const a = JSON.parse(expr.match(/^window\.__sr\.resolveAnchor\((.*)\)$/s)![1]);
+      if (a === 'top') return 0;
+      if (a.selector === '.destination') return onNewPage ? 1200 : undefined;
+      return undefined;
+    },
+  } as unknown as Session;
+  const cfg = cfgWith([
+    { type: 'start', at: 'top', hold: 1 },
+    { type: 'click', target: { selector: 'a.nav' }, settle: 1 },
+    { type: 'move', to: { selector: '.destination' }, duration: 1, ease: 'linear', hold: 0.5 },
+  ]);
+  const track = await buildTrack(session, cfg, {
+    perform: async () => {
+      onNewPage = true;
+      return { navigated: true, sameDocument: true, waitedMs: 900, url: 'https://example.com/routed' };
+    },
+  });
+  assert.equal(track.actions[0].hardNavUrl, undefined);
+  assert.equal(segmentStart(track, track.offsets.length - 1), null);
+});
+
+test('segmentStart: picks the last document load at or before the frame, none before it', () => {
+  const step = { type: 'click', target: { selector: 'a' } } as const;
+  const track = {
+    actions: [
+      { frame: 10, at: 0, step },
+      { frame: 30, at: 0, step, hardNavUrl: 'https://example.com/a' },
+      { frame: 50, at: 0, step },
+      { frame: 70, at: 0, step, hardNavUrl: 'https://example.com/b' },
+    ],
+  } as unknown as Track;
+  assert.equal(segmentStart(track, 9), null, 'nothing has loaded yet');
+  assert.equal(segmentStart(track, 29), null, 'the soft click at 10 is not a boundary');
+  assert.deepEqual(segmentStart(track, 30), { frame: 30, url: 'https://example.com/a', index: 1 }, 'the boundary frame itself belongs to the new document');
+  assert.deepEqual(segmentStart(track, 69), { frame: 30, url: 'https://example.com/a', index: 1 });
+  assert.deepEqual(segmentStart(track, 200), { frame: 70, url: 'https://example.com/b', index: 3 }, 'the LAST load before the frame wins');
 });

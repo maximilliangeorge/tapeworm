@@ -513,3 +513,98 @@ test('without page.localStorage the runtime never touches storage', () => {
   });
   assert.equal(store.size, 0);
 });
+
+test('walkFrames: advances the clock, fires timers in order, and imposes the scroll', async () => {
+  const { window, sr, settle } = boot(cfg());
+  sr.beginCapture(false);
+  const fired: string[] = [];
+  window.setTimeout(() => fired.push('late'), 2000);
+  window.setTimeout(() => fired.push('early'), 500);
+  const frames: Array<[number, number | null]> = [];
+  for (let n = 1; n <= 150; n++) frames.push([n / 60, n * 10]);
+  const r: any = await settle(sr.walkFrames(frames, false, 0));
+  assert.deepEqual(fired, ['early', 'late']);
+  assert.equal(window.performance.now(), 2500);
+  assert.equal(window.scrollY, 1500);
+  // the batch reports the last imposed offset so the driver can drift-check it
+  assert.equal(r.requested, 1500);
+  assert.equal(r.actual, 1500);
+});
+
+test('walkFrames: the page\'s own rAF loop ticks once per walked frame — jump mode keeps tick counts', async () => {
+  const { window, sr, settle } = boot(cfg());
+  sr.beginCapture(false);
+  let ticks = 0;
+  const loop = () => { ticks++; window.requestAnimationFrame(loop); };
+  window.requestAnimationFrame(loop);
+  const frames: Array<[number, number | null]> = [];
+  for (let n = 1; n <= 30; n++) frames.push([n / 60, 0]);
+  await settle(sr.walkFrames(frames, false, 0));
+  assert.equal(ticks, 30);
+});
+
+test('walkFrames: null entries are FREE frames — the page keeps the scroll', async () => {
+  const { window, sr, settle } = boot(cfg());
+  sr.beginCapture(false);
+  await settle(sr.walkFrames([[1 / 60, 100]], false, 0));
+  assert.equal(window.scrollY, 100);
+  const r: any = await settle(sr.walkFrames([[2 / 60, null], [3 / 60, null]], false, 0));
+  assert.equal(window.scrollY, 100, 'no offset was imposed');
+  assert.equal(r.requested, null, 'nothing to drift-check');
+  assert.equal(window.performance.now(), 3000 / 60, 'the clock still advanced');
+});
+
+// ---------------------------------------------------------------- seeded random
+
+/** Three draws made inside the vm, where the runtime's Math lives. */
+const draw3 = (window: any): number[] =>
+  JSON.parse(vm.runInContext('JSON.stringify([Math.random(), Math.random(), Math.random()])', window));
+
+test('seedRandom: off by default — Math.random stays native', () => {
+  const { window } = boot(cfg());
+  assert.match(vm.runInContext('Math.random.toString()', window), /native code/);
+});
+
+test('seedRandom: load-time draws are identical across boots, in [0, 1), and follow the seed', () => {
+  const a = draw3(boot(cfg({ page: { seedRandom: 7 } })).window);
+  const b = draw3(boot(cfg({ page: { seedRandom: 7 } })).window);
+  const c = draw3(boot(cfg({ page: { seedRandom: 8 } })).window);
+  assert.deepEqual(a, b);
+  assert.notDeepEqual(a, c);
+  for (const v of a) assert.ok(v >= 0 && v < 1, `${v} out of range`);
+});
+
+test('seedRandom: true means the default seed', () => {
+  assert.deepEqual(
+    draw3(boot(cfg({ page: { seedRandom: true } })).window),
+    draw3(boot(cfg({ page: { seedRandom: 42 } })).window),
+  );
+});
+
+test("seedRandom: a frame's draws depend on (seed, frame time), never on earlier frames' draw count — sharding survives", async () => {
+  // worker A renders from frame 0, drawing along the way
+  const a = boot(cfg({ page: { seedRandom: 7 } }));
+  a.sr.beginCapture(false);
+  await a.settle(a.sr.frame(0, 0, 0));
+  const atZero = draw3(a.window);
+  await a.settle(a.sr.frame(0, 0.5, 0));
+  const atHalf = draw3(a.window);
+  assert.notDeepEqual(atHalf, atZero, 'each frame draws its own stream');
+
+  // worker B's shard starts AT that frame — no earlier frames, no earlier draws
+  const b = boot(cfg({ page: { seedRandom: 7 } }));
+  b.sr.beginCapture(false);
+  await b.settle(b.sr.frame(0, 0.5, 0));
+  assert.deepEqual(draw3(b.window), atHalf);
+});
+
+test('seedRandom: walkFrames reseeds the same way frame() does', async () => {
+  const a = boot(cfg({ page: { seedRandom: 7 } }));
+  a.sr.beginCapture(false);
+  await a.settle(a.sr.walkFrames([[0.5, 0]], false, 0));
+
+  const b = boot(cfg({ page: { seedRandom: 7 } }));
+  b.sr.beginCapture(false);
+  await b.settle(b.sr.frame(0, 0.5, 0));
+  assert.deepEqual(draw3(a.window), draw3(b.window));
+});

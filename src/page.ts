@@ -196,9 +196,12 @@ export async function waitForSoftNavigation(session: Session, timeoutMs = 15_000
   return Date.now() - started;
 }
 
-/** Return to the configured URL and get the page back into a filmable state. */
-export async function resetPage(session: Session, cfg: Resolved): Promise<string[]> {
-  await navigate(session, cfg.url);
+/**
+ * Return to the configured URL — or a segment boundary a reduced-accuracy
+ * frame sample restarts from — and get the page back into a filmable state.
+ */
+export async function resetPage(session: Session, cfg: Resolved, url = cfg.url): Promise<string[]> {
+  await navigate(session, url);
   const notes = await settleNewDocument(session, cfg);
   notes.push(...(await prewarm(session, cfg)));
   return notes;

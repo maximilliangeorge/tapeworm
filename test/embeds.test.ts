@@ -611,3 +611,33 @@ test('ready() gives up after maxMs when a handshake never answers', async () => 
   const r = { ...(await p) };
   assert.deepEqual(r, { embeds: 1, ready: false });
 });
+
+test('stamp assigns birth times without seeking — an embed the walk passes keeps its own clock', async () => {
+  const b = bootEmbeds();
+  b.controller.stamp(5); // the batched walk is 5s in before the embed exists
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  sent.length = 0;
+  b.controller.stamp(7); // the walk passes the embed's mount frame
+  assert.ok(!sent.some((p) => p.msg.method === 'setCurrentTime'), 'stamping never posts a seek');
+  const wait = b.controller.sync(9); // the first CAPTURED frame with the embed present
+  const seekMsg = sent.find((p) => p.msg.method === 'setCurrentTime');
+  assert.ok(seekMsg, 'the captured frame seeks it');
+  assert.ok(Math.abs(seekMsg.msg.value - (2 + 0.5 / 60)) < 1e-9, 'local time runs from the walked-past birth, not the captured frame');
+  b.deliver({ event: 'seeked', data: { seconds: seekMsg.msg.value } }, iframe.contentWindow);
+  await wait;
+});
+
+test('stamp before any sync: an embed present at the walk start is born at zero', () => {
+  const b = bootEmbeds();
+  const { iframe, sent } = fakeIframe(VIMEO_SRC);
+  b.controller.scan(iframe);
+  b.deliver({ method: 'getDuration', value: 30 }, iframe.contentWindow);
+  b.controller.stamp(0); // frame 0 of the walk
+  sent.length = 0;
+  b.controller.sync(5);
+  const seekMsg = sent.find((p) => p.msg.method === 'setCurrentTime');
+  assert.ok(seekMsg);
+  assert.ok(Math.abs(seekMsg.msg.value - (5 + 0.5 / 60)) < 1e-9, 'born at 0 — global time IS its time');
+});

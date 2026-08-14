@@ -452,12 +452,29 @@ test('trim: rejects the wrong shapes', () => {
 
 test('frame: defaults to null, resolves seconds and percents', () => {
   assert.equal(resolveConfig(BASE).frame, null);
-  assert.deepEqual(resolveConfig({ ...BASE, frame: 2.5 }).frame, { sec: 2.5 });
-  assert.deepEqual(resolveConfig({ ...BASE, frame: 0 }).frame, { sec: 0 });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: 2.5 }).frame, { sec: 2.5, accuracy: 'exact' });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: 0 }).frame, { sec: 0, accuracy: 'exact' });
   // the CLI hands the raw flag string through, so both spellings parse
-  assert.deepEqual(resolveConfig({ ...BASE, frame: '2.5' }).frame, { sec: 2.5 });
-  assert.deepEqual(resolveConfig({ ...BASE, frame: '50%' }).frame, { pct: 50 });
-  assert.deepEqual(resolveConfig({ ...BASE, frame: '100%' }).frame, { pct: 100 });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: '2.5' }).frame, { sec: 2.5, accuracy: 'exact' });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: '50%' }).frame, { pct: 50, accuracy: 'exact' });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: '100%' }).frame, { pct: 100, accuracy: 'exact' });
+});
+
+test('frame: the object form carries accuracy, defaulting to exact', () => {
+  assert.deepEqual(resolveConfig({ ...BASE, frame: { at: 2.5 } }).frame, { sec: 2.5, accuracy: 'exact' });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: { at: '50%', accuracy: 'segment' } }).frame, { pct: 50, accuracy: 'segment' });
+  assert.deepEqual(resolveConfig({ ...BASE, frame: { at: '1.5', accuracy: 'jump' } }).frame, { sec: 1.5, accuracy: 'jump' });
+  assert.throws(() => resolveConfig({ ...BASE, frame: {} as never }), /"frame" object form needs "at"/);
+  assert.throws(
+    () => resolveConfig({ ...BASE, frame: { at: 1, accuracy: 'fast' } as never }),
+    /frame.accuracy must be exact, segment or jump \(got "fast"\)/,
+  );
+  // the at value keeps the scalar form's validation and messages
+  assert.throws(() => resolveConfig({ ...BASE, frame: { at: '150%' } }), /"frame" percent must be 0-100/);
+  assert.throws(
+    () => resolveConfig({ ...BASE, frame: { at: 1, acuracy: 'jump' } as never }),
+    /unknown key "acuracy" in "frame" — did you mean "accuracy"\?/,
+  );
 });
 
 test('frame: the output is one PNG file, whatever output said', () => {
@@ -571,6 +588,23 @@ test('page.localStorage rejects non-objects and non-string values', () => {
   );
 });
 
+test('page.seedRandom: off by default; true means the default seed; an integer is taken verbatim', () => {
+  assert.equal(resolveConfig(BASE).page.seedRandom, null);
+  assert.equal(resolveConfig({ ...BASE, page: { seedRandom: false } }).page.seedRandom, null);
+  assert.equal(resolveConfig({ ...BASE, page: { seedRandom: true } }).page.seedRandom, 42);
+  assert.equal(resolveConfig({ ...BASE, page: { seedRandom: 7 } }).page.seedRandom, 7);
+  assert.equal(resolveConfig({ ...BASE, page: { seedRandom: 0 } }).page.seedRandom, 0);
+});
+
+test('page.seedRandom rejects non-integer seeds — Math.imul would silently truncate them', () => {
+  for (const bad of [4.2, NaN, Infinity, '7']) {
+    assert.throws(
+      () => resolveConfig({ ...BASE, page: { seedRandom: bad } } as never),
+      /"page.seedRandom" must be true \(seed 42\) or an integer seed/,
+    );
+  }
+});
+
 test('"$schema" is a known key, accepted and ignored', () => {
   const r = resolveConfig({ ...BASE, $schema: './schema/tapeworm.config.schema.json' });
   assert.equal(r.url, BASE.url);
@@ -600,6 +634,7 @@ test('the published JSON Schema knows exactly the keys the validator knows', () 
   expect('output', keysOf(schema.properties.output), KNOWN_KEYS.output);
   expect('prewarm', keysOf(schema.properties.prewarm), KNOWN_KEYS.prewarm);
   expect('page', keysOf(schema.properties.page), KNOWN_KEYS.page);
+  expect('frame', keysOf(schema.properties.frame.oneOf?.[2]), KNOWN_KEYS.frame);
   expect('trim', keysOf(schema.properties.trim), KNOWN_KEYS.trim);
   expect('cursor', keysOf(defs.cursor.oneOf?.[1]), KNOWN_KEYS.cursor);
   const page = schema.properties.page.properties as Record<string, { oneOf?: Array<{ properties?: Record<string, unknown> }> }>;

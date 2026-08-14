@@ -118,6 +118,9 @@ export type Step =
 
 export type TimelineEntry = Segment | Step;
 
+/** How faithful a single-frame sample must be — see `Config['frame']`. */
+export type FrameAccuracy = 'exact' | 'segment' | 'jump';
+
 export type VideoMode =
   /** Seek every <video> to the frame's timestamp. The default, and the whole point. */
   | 'sync'
@@ -201,6 +204,17 @@ export type Config = {
     clock?: 'virtual' | 'real';
     /** Pause and seek CSS/WAAPI animations per frame. Default true. */
     seekAnimations?: boolean;
+    /**
+     * Stub Math.random with a seeded PRNG so a page that randomises —
+     * particle fields, shuffled testimonials, generative art — films the
+     * same way every run. Off by default; `true` uses seed 42, or pass an
+     * integer seed. The generator is reseeded from (seed, frame time) at
+     * every frame step, so a frame's draws don't depend on how many draws
+     * earlier frames made — which is what keeps frames shardable. Draws
+     * during load and pre-warm come off the base seed, identical in every
+     * worker. `crypto.getRandomValues` is left alone.
+     */
+    seedRandom?: boolean | number;
     /**
      * Draw a cursor sprite during recorded-gesture replay, so the gesture is
      * visible in the video (screenshots never contain the real pointer).
@@ -301,8 +315,27 @@ export type Config = {
    * pixel-identical to the same moment of a full render. The output is one
    * PNG file (`output.path` names it; a video extension there is swapped for
    * `.png`) and `output.codec` is ignored. CLI: `--frame`.
+   *
+   * The object form adds `accuracy`, trading determinism for speed on
+   * path-dependent timelines (interactions, recordings):
+   *
+   * 'exact'   — the default and the guarantee above: every frame before the
+   *             sample is walked (input dispatched, clock advanced).
+   * 'segment' — restart at the last document-load navigation at or before the
+   *             sampled frame instead of replaying from the top. A document
+   *             load destroys all in-page state, so the destination's state is
+   *             URL + storage + cache — all populated while the plan was
+   *             built — plus the actions after the load, which still replay.
+   *             Differs from exact only for pages that render differently on
+   *             direct load (referrer checks, route guards).
+   * 'jump'    — additionally step the walk on the virtual clock alone (no
+   *             rendering between frames) and replay only the button edges of
+   *             recorded gestures, not pointer movement. Hover-dependent state
+   *             from mid-recording movement may differ. Needs prewarm 'full';
+   *             with 'cache'/'none' it downgrades to 'segment' with a note.
+   *             CLI: `--frame-accuracy`.
    */
-  frame?: number | string;
+  frame?: number | string | { at: number | string; accuracy?: 'exact' | 'segment' | 'jump' };
   /**
    * Cut milliseconds off the ends of the finished video. The whole timeline is
    * still planned (and, when the render is path-dependent, walked) — trimming
@@ -357,6 +390,8 @@ export type Resolved = {
     hideOverlays: boolean;
     clock: 'virtual' | 'real';
     seekAnimations: boolean;
+    /** Seed for the Math.random stub; null = leave Math.random alone. */
+    seedRandom: number | null;
     /**
      * false = never drawn. `auto` = the macOS set: sprite name → embedded
      * data: URI, rendered width, and hotspot, all pre-scaled at config time;
@@ -386,8 +421,15 @@ export type Resolved = {
     /** Seeded into the page before its scripts run; null = leave storage alone. */
     localStorage: Record<string, string> | null;
   };
-  /** Single-frame sampling: seconds into the timeline, or a percent of it. Null = render the video. */
-  frame: { sec: number; pct?: never } | { pct: number; sec?: never } | null;
+  /**
+   * Single-frame sampling: seconds into the timeline, or a percent of it.
+   * Null = render the video. `accuracy` trades determinism for speed on
+   * path-dependent timelines — see `Config['frame']`.
+   */
+  frame:
+    | { sec: number; pct?: never; accuracy: FrameAccuracy }
+    | { pct: number; sec?: never; accuracy: FrameAccuracy }
+    | null;
   trim: { startMs: number; endMs: number };
   jobs: number;
   chromePath: string | null;

@@ -103,6 +103,10 @@
           "type": "boolean",
           "description": "Pause and seek CSS/WAAPI animations per frame. Default true."
         },
+        "seedRandom": {
+          "oneOf": [{ "type": "boolean" }, { "type": "integer" }],
+          "description": "Stub Math.random with a seeded PRNG so a randomised page films the same every run. true = seed 42, or pass an integer seed. Reseeded per frame from (seed, frame time), so sharding survives. Default off."
+        },
         "cursor": { "$ref": "#/definitions/cursor" },
         "video": { "$ref": "#/definitions/videoMode" },
         "embeds": {
@@ -158,10 +162,29 @@
       }
     },
     "frame": {
-      "description": "Sample a single frame as one PNG instead of rendering the video: seconds into the timeline (2.5) or a percent of it (\"50%\").",
+      "description": "Sample a single frame as one PNG instead of rendering the video: seconds into the timeline (2.5) or a percent of it (\"50%\"). The object form adds accuracy, trading determinism for speed on path-dependent timelines.",
       "oneOf": [
         { "type": "number", "minimum": 0 },
-        { "type": "string", "pattern": "^\\s*[0-9]*\\.?[0-9]+\\s*%?\\s*$" }
+        { "type": "string", "pattern": "^\\s*[0-9]*\\.?[0-9]+\\s*%?\\s*$" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["at"],
+          "properties": {
+            "at": {
+              "description": "Seconds into the timeline (2.5) or a percent of it (\"50%\").",
+              "oneOf": [
+                { "type": "number", "minimum": 0 },
+                { "type": "string", "pattern": "^\\s*[0-9]*\\.?[0-9]+\\s*%?\\s*$" }
+              ]
+            },
+            "accuracy": {
+              "description": "exact = walk every frame before the sample (default; pixel-identical to a full render). segment = restart at the last full-page navigation at or before the sample. jump = also step the walk on the virtual clock alone and replay only recorded clicks, not pointer movement.",
+              "enum": ["exact", "segment", "jump"],
+              "default": "exact"
+            }
+          }
+        }
       ]
     },
     "trim": {

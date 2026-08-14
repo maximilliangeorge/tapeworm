@@ -49,9 +49,10 @@ export const KNOWN_KEYS = {
   viewport: ['width', 'height', 'dpr'],
   auto: ['maxSections'],
   output: ['path', 'codec', 'crf'],
+  frame: ['at', 'accuracy'],
   prewarm: ['mode', 'enabled', 'maxHeight', 'timeout', 'reloadAfter', 'imageBudget'],
   page: [
-    'dismissConsent', 'hideOverlays', 'clock', 'seekAnimations', 'cursor', 'video', 'embeds',
+    'dismissConsent', 'hideOverlays', 'clock', 'seekAnimations', 'seedRandom', 'cursor', 'video', 'embeds',
     'css', 'script', 'settle', 'waitForIntro', 'replayIntro', 'unlockIntro', 'substitute',
     'localStorage',
   ],
@@ -125,6 +126,7 @@ function rejectUnknownKeys(input: Config): void {
   check(input.viewport, '"viewport"', KNOWN_KEYS.viewport);
   check(input.auto, '"auto"', KNOWN_KEYS.auto);
   check(input.output, '"output"', KNOWN_KEYS.output);
+  check(input.frame, '"frame"', KNOWN_KEYS.frame); // scalar forms skip through (check ignores non-objects)
   check(input.prewarm, '"prewarm"', KNOWN_KEYS.prewarm);
   check(input.trim, '"trim"', KNOWN_KEYS.trim);
   if (isPlainObject(input.page)) {
@@ -356,6 +358,20 @@ function resolveLocalStorage(ls: Record<string, string> | undefined): Resolved['
   return Object.keys(ls).length > 0 ? ls : null;
 }
 
+/**
+ * The seed feeds Math.imul in the runtime's PRNG, so a fractional seed would
+ * be silently truncated — 4.2 and 4 rendering identically is exactly the kind
+ * of quiet lie this config layer exists to refuse.
+ */
+function resolveSeedRandom(v: boolean | number | undefined): Resolved['page']['seedRandom'] {
+  if (v === undefined || v === false) return null;
+  if (v === true) return 42;
+  if (typeof v !== 'number' || !Number.isInteger(v)) {
+    throw new Error('"page.seedRandom" must be true (seed 42) or an integer seed');
+  }
+  return v;
+}
+
 const CURSOR_MIME: Record<string, string> = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
@@ -498,8 +514,11 @@ function resolveCursor(
   return { image, tipX: tip[0], tipY: tip[1], size, fade };
 }
 
-function resolveFrame(f: Config['frame']): Resolved['frame'] {
-  if (f === undefined) return null;
+/**
+ * Parse a frame target — seconds ("2.5") or a percent ("50%"). Exported so
+ * --watch can parse retarget lines with the exact same rules and messages.
+ */
+export function parseFrameAt(f: number | string): { sec: number } | { pct: number } {
   if (typeof f === 'string' && f.trim().endsWith('%')) {
     const body = f.trim().slice(0, -1).trim();
     const pct = body === '' ? NaN : Number(body); // Number('') is 0, so a bare "%" needs refusing by hand
@@ -515,6 +534,23 @@ function resolveFrame(f: Config['frame']): Resolved['frame'] {
     );
   }
   return { sec };
+}
+
+const FRAME_ACCURACIES = ['exact', 'segment', 'jump'] as const;
+
+function resolveFrame(f: Config['frame']): Resolved['frame'] {
+  if (f === undefined) return null;
+  if (isPlainObject(f)) {
+    if (f.at === undefined) {
+      throw new Error('"frame" object form needs "at": seconds into the timeline (2.5) or a percent ("50%")');
+    }
+    const accuracy = f.accuracy ?? 'exact';
+    if (!FRAME_ACCURACIES.includes(accuracy as never)) {
+      throw new Error(`frame.accuracy must be exact, segment or jump (got "${accuracy}")`);
+    }
+    return { ...parseFrameAt(f.at), accuracy };
+  }
+  return { ...parseFrameAt(f), accuracy: 'exact' };
 }
 
 function resolveTrim(t: Config['trim']): Resolved['trim'] {
@@ -651,6 +687,7 @@ export function resolveConfig(input: Config): Resolved {
       hideOverlays: input.page?.hideOverlays ?? true,
       clock: input.page?.clock ?? 'virtual',
       seekAnimations: input.page?.seekAnimations ?? true,
+      seedRandom: resolveSeedRandom(input.page?.seedRandom),
       cursor: resolveCursor(input.page?.cursor, url),
       video,
       embeds,

@@ -9,6 +9,40 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Seeded `Math.random` (`page.seedRandom`, CLI `--seed-random[=n]`).** Opt-in:
+  stubs `Math.random` with a seeded PRNG so a page that randomises — particle
+  fields, shuffled testimonials, generative art — films the same way every run.
+  `true` (bare `--seed-random`) seeds with 42; an integer picks the seed. The
+  generator is reseeded from (seed, frame time) at every frame step, so a
+  frame's draws never depend on earlier frames' draw count and the frame range
+  stays shardable across `--jobs`; load and pre-warm draw off the base seed,
+  identical in every worker. `crypto.getRandomValues` is left alone.
+
+- **Fast single-frame sampling.** `--frame` no longer pays one CDP round trip
+  (and two paint settles) per walked frame on path-dependent timelines: runs
+  of frames with no input to dispatch are stepped in-page in batches, carrying
+  forward everything later frames depend on — clock, scroll, timers, animation
+  and embed birth stamps — and the advisory video/embed probe is skipped, since
+  the sample surfaces the same problems itself. The sample stays pixel-identical
+  to the same moment of a full render.
+
+- **`--frame-accuracy` (config `"frame": { "at", "accuracy" }`).** Trades
+  determinism for speed on path-dependent samples: `exact` (default) walks
+  every prior frame; `segment` restarts at the last full-page navigation at or
+  before the sample — a document load destroys all in-page state, so only the
+  actions after it need replaying; `jump` additionally steps the walk on the
+  virtual clock alone and replays only recorded clicks, not pointer movement,
+  turning real rendering back on for the last second before the sample so
+  nearby reveals and animations land where an exact walk would put them.
+  `jump` downgrades to `segment` under prewarm `cache`/`none`, where reveal
+  state depends on the exact scroll path.
+
+- **`--watch`.** With `--frame`, keeps the browser and the built plan alive
+  after the sample: type a new time or percent to re-render the PNG in place
+  (peeks ahead walk forward incrementally; peeks behind reset, to the segment
+  boundary when accuracy allows), and saving the config file re-plans with the
+  same CLI flags re-applied. Ctrl-C or Ctrl-D quits.
+
 - **A JSON Schema for config files.** `schema/tapeworm.config.schema.json`
   describes the full config format, so editors validate and autocomplete a
   config as you type. Point at it with a top-level `"$schema"` — a new known

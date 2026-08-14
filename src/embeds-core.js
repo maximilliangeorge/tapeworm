@@ -477,6 +477,18 @@ function createController(env) {
   }
 
   /**
+   * Assign birth times without seeking — what a walked-but-not-captured frame
+   * needs. The batched walk calls this instead of sync(), so an embed that
+   * mounts mid-walk still anchors its clock to the frame it appeared on
+   * rather than to the first frame that actually renders.
+   */
+  function stamp(tSec) {
+    if (env.mode !== 'sync') return;
+    sessions.forEach((s) => { if (s.birth == null) s.birth = everSynced ? tSec : 0; });
+    everSynced = true;
+  }
+
+  /**
    * Shard-start gate: wait (bounded) for handshakes, then prime one seek so
    * the first captured frame doesn't land on a cold buffer. Instant when the
    * page has no provider embeds.
@@ -531,7 +543,7 @@ function createController(env) {
     return rows;
   }
 
-  return { scan, sync, ready, count: () => sessions.size, report };
+  return { scan, sync, stamp, ready, count: () => sessions.size, report };
 }
 
 globalThis.TapewormEmbeds = { createController };

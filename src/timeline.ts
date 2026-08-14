@@ -35,8 +35,14 @@ export type Track = {
    * whatever happens to sit there. Empty until interactions are executable;
    * when populated, frames stop being independent and the track must render
    * sequentially.
+   *
+   * `hardNavUrl` marks an action whose click loaded a NEW DOCUMENT while the
+   * plan was built, and where it landed. A document load is a state firewall —
+   * nothing in-page survives it — which is what lets a reduced-accuracy
+   * single-frame sample restart there (see segmentStart) instead of replaying
+   * the timeline from the top.
    */
-  actions: Array<{ frame: number; at: number; step: Step }>;
+  actions: Array<{ frame: number; at: number; step: Step; hardNavUrl?: string }>;
   /**
    * Recorded pointer state per frame, parallel to `offsets` (always the same
    * length — the frame count has ONE source of truth). null = no recorded
@@ -118,7 +124,7 @@ export type BuildOptions = {
   perform?: (
     step: Step & { type: 'click' | 'hover' },
     y: number,
-  ) => Promise<{ navigated: boolean; sameDocument?: boolean; waitedMs?: number }>;
+  ) => Promise<{ navigated: boolean; sameDocument?: boolean; waitedMs?: number; url?: string }>;
   /**
    * Replay a record step's gesture while the track is built — the recording's
    * counterpart of `perform`, and for the same reason: a recorded click can
@@ -186,9 +192,12 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
       actions.push({ frame: offsets.length, at: snap(y), step });
       // Performing it NOW is what lets later anchors resolve on whatever page
       // the click leads to. A navigation puts the new document at scroll 0.
-      const performed = opts.perform ? await opts.perform(step, y) : { navigated: false };
+      const performed = opts.perform ? await opts.perform(step, y) : ({ navigated: false } as const);
       if (opts.perform) interacted = true;
       if (performed.navigated) y = 0;
+      if (performed.navigated && performed.sameDocument === false && performed.url) {
+        actions[actions.length - 1].hardNavUrl = performed.url;
+      }
 
       // A client-side route change plays its transition ON CAMERA during the
       // capture pass, across these settle frames. Two consequences: an unset
@@ -296,6 +305,27 @@ export async function buildTrack(session: Session, cfg: Resolved, opts: BuildOpt
     throw new Error(`internal: offsets (${offsets.length}) and pointer (${pointer.length}) frame counts diverged`);
   }
   return { offsets, pointer, actions, sequential: actions.length > 0 || pointer.some((p) => p !== null), plan };
+}
+
+/**
+ * The last document-load boundary at or before `frame`, or null. Everything
+ * before a document load happened on a page that no longer exists: the
+ * destination document's state is (URL + storage + HTTP cache) — all of which
+ * the plan phase populated by actually performing the click chain — plus the
+ * actions performed after the load, which still replay. So a single-frame
+ * sample at 'segment'/'jump' accuracy restarts here by navigating to `url`
+ * directly, withholding the boundary action (`index`) whose navigation that
+ * load replaces. Soft navigations never qualify: the document survives them,
+ * so router state genuinely carries across.
+ */
+export function segmentStart(track: Track, frame: number): { frame: number; url: string; index: number } | null {
+  let found: { frame: number; url: string; index: number } | null = null;
+  for (let i = 0; i < track.actions.length; i++) {
+    const a = track.actions[i];
+    if (a.frame > frame) break; // actions are pushed in frame order
+    if (a.hardNavUrl) found = { frame: a.frame, url: a.hardNavUrl, index: i };
+  }
+  return found;
 }
 
 /**

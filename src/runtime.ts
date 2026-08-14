@@ -45,6 +45,7 @@ export function runtimeSource(cfg: Resolved): string {
     fps: cfg.fps,
     clock: cfg.page.clock,
     seekAnimations: cfg.page.seekAnimations,
+    seedRandom: cfg.page.seedRandom,
     video: cfg.page.video,
     embeds: cfg.page.embeds,
     dismissConsent: cfg.page.dismissConsent,
@@ -152,6 +153,26 @@ if (OPT.clock === 'virtual') {
   VDate.UTC = nDate.UTC;
   window.Date = VDate;
   try { window.performance.now = () => vnow; } catch (e) {}
+}
+
+// ---------------------------------------------------------------- random
+// Opt-in seeded Math.random, installed before the page's scripts capture it.
+// Reseeded from (seed, frame time) at every frame step rather than advancing
+// one stream across the render: a single stream would make a frame's draws
+// depend on how many draws the frames before it made — i.e. on which frames
+// THIS worker rendered — and that breaks sharding. Draws during load and
+// pre-warm come off the base seed, so every worker's load matches.
+let reseedRandom = () => {};
+if (OPT.seedRandom != null) {
+  let rs = 0;
+  reseedRandom = (tMs) => { rs = (Math.imul(OPT.seedRandom, 0x9E3779B9) ^ Math.imul(Math.round(tMs) + 1, 0x85EBCA6B)) >>> 0; };
+  reseedRandom(-1);
+  Math.random = function () {           // mulberry32
+    rs = (rs + 0x6D2B79F5) | 0;
+    let t = Math.imul(rs ^ (rs >>> 15), 1 | rs);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // ---------------------------------------------------------------- videos
@@ -645,6 +666,7 @@ window.__sr = {
   async frame(y, tSec, imageBudgetMs, cursor) {
     mode = 'stepped';
     vnow = tSec * 1000;
+    reseedRandom(vnow);
     const actual = y == null ? window.scrollY : setScroll(y);
     flush();                    // timers + rAF at the virtual timestamp — this is
                                 // where IntersectionObserver-driven reveals get added
@@ -659,6 +681,50 @@ window.__sr = {
     if (cursor !== undefined) drawCursor(cursor);
     await new Promise((r) => nRaf(() => nRaf(r)));   // let layout + paint settle
     return { scrollY: window.scrollY, requested: y, actual, max: maxScroll(), imagesAwaited: loaded };
+  },
+  /**
+   * Walk a run of never-captured frames in one call — frame()'s batched,
+   * screenshot-free counterpart. Each entry is [tSec, y]; y null is a FREE
+   * frame (the page keeps the scroll). Per frame it carries forward everything
+   * later frames can depend on — the virtual clock, the scroll offset, due
+   * timers and rAF, animation birth/seeks, embed birth stamps — and skips what
+   * only a screenshot needs: video/embed seeking (absolute per frame, so
+   * intermediate seeks are pure waste), the cursor sprite, and the paint
+   * settle.
+   *
+   * native=true awaits one real rendering frame whenever the scroll actually
+   * moved (or the frame is free) — that rendering step is what delivers
+   * IntersectionObserver entries, so scroll reveals still fire mid-walk at
+   * the frame they belong to. false steps the virtual clock only, the
+   * "jump"-accuracy walk. Images the walk set loading get one bounded wait at
+   * the end so the captured frame that follows doesn't start behind.
+   *
+   * Returns the last imposed offset and where the page actually is, so the
+   * driver can run its scroll-drift check per batch instead of per frame.
+   */
+  async walkFrames(list, native, imageBudgetMs) {
+    mode = 'stepped';
+    let requested = null;
+    let actual = null;
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i][0];
+      const y = list[i][1];
+      vnow = t * 1000;
+      reseedRandom(vnow);
+      let moved = y == null;
+      if (y != null) {
+        const before = window.scrollY;
+        actual = setScroll(y);
+        requested = y;
+        moved = actual !== before;
+      }
+      flush();
+      seekAnimations(vnow);
+      embeds.stamp(t);
+      if (native && moved) await new Promise((r) => nRaf(r));
+    }
+    const loaded = native ? await waitForImages(imageBudgetMs == null ? 1500 : imageBudgetMs) : 0;
+    return { requested, actual, max: maxScroll(), imagesAwaited: loaded };
   },
   /** Manual cursor control, same sprite frame() drives. */
   cursor(x, y, down) {
